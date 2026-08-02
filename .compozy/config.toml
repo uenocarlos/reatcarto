@@ -1,0 +1,4 @@
+[defaults]
+ide = 'cursor-agent' 
+model = 'composer-2.5'
+reasoning_effort = 'medium'

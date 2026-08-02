@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"South America Context"},"geometry":{"type":"Polygon","coordinates":[[[-74,-34],[-34,-34],[-34,5],[-74,5],[-74,-34]]]}},{"type":"Feature","properties":{"name":"Brazil highlight"},"geometry":{"type":"Polygon","coordinates":[[[-58,-33],[-38,-33],[-38,5],[-58,5],[-58,-33]]]}}]}

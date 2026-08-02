@@ -1,0 +1,2 @@
+ALTER TABLE maps
+  ADD COLUMN IF NOT EXISTS export_settings JSONB NOT NULL DEFAULT '{}'::jsonb;

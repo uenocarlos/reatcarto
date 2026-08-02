@@ -1,0 +1,6 @@
+{
+  "appId": "com.reatcarto.app",
+  "appName": "ReatCarto",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

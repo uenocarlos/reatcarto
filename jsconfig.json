@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "jsx": "react-jsx",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext", "dom"],
+    "target": "esnext",
+    "checkJs": false,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": [],
+    "maxNodeModuleJsDepth": 0
+  },
+  "include": [
+    "src/page/AdminUsers.jsx",
+    "src/page/AdminAudit.jsx",
+    "src/page/AdminMapIntervention.jsx",
+    "src/page/Profile.jsx",
+    "src/api/apiClient.js",
+    "src/api/http.js",
+    "src/components/ProtectedRoute.jsx"
+  ],
+  "exclude": ["node_modules", "dist", "src/vite-plugins", "src/components/ui", "src/components/map"]
+}
