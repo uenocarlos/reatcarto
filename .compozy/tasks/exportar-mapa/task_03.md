@@ -1,14 +1,14 @@
 ---
 status: completed
-title: Preview de composição completo
+title: "Export shell, MapEditor wiring, access gates, download UX, and mobile"
 type: frontend
-complexity: high
+complexity: critical
 ---
 
-# Task 3: Preview de composição completo
+# Task 3: Export shell, MapEditor wiring, access gates, download UX, and mobile
 
 ## Overview
-Completa o preview vivo da composição: frame de papel/DPI, legenda (inside com drag/resize, beside/below com crescimento do canvas), aparência, overlay de visibilidade independente do editor, tags globais, basemaps alinhados (Carto/OSM/ArcGIS; Offline nativo via `tileManager`), chrome sempre ligado (graticule, escala dinâmica, norte) e rodapé institucional com logo. Este slice é o que o dono vê bater com o PNG.
+Completes the product path: owner-only export entry in the map editor, ephemeral shell with full control groups and debounced WYSIWYG preview, single-flight PNG/PDF download with progress and recovery, cancel isolation from editor state, public-surface absence of export, and full mobile control reachability. Depends on task_01 pure libraries and task_02 composition components to deliver end-to-end owner journeys.
 
 <critical>
 - ALWAYS READ the PRD, the TechSpec, and their catalogs (`_user_stories.md`, `_tests.md`) before starting
@@ -19,83 +19,103 @@ Completa o preview vivo da composição: frame de papel/DPI, legenda (inside com
 </critical>
 
 <requirements>
-1. MUST update the live preview without a mandatory “Atualizar Preview” step when options change.
-2. MUST support legend positions `inside` | `beside` | `below`; beside/below MUST grow the composition so the legend does not cover the map; inside MUST support clamped drag/resize via `legendRect` (normalized 0–1).
-3. MUST apply legend columns (1–6), font size (8–18px), and spacing (`compact`|`normal`|`wide`) with clamp on out-of-range restored values.
-4. MUST filter preview map and legend via export-only `hiddenCategoryIds` / `hiddenElementIds` without mutating source editor elements (ADR-008).
-5. MUST provide one global `showTags` switch; tags MUST omit blank names and hidden elements; hostile names MUST render as plain text.
-6. MUST resolve basemaps `carto` | `osm` | `satellite` (ArcGIS, not Google) and native-only `offline` via `tileManager.getLocalTileUrl`; Offline MUST be disabled on web; unusable offline MUST surface failure (no false success later).
-7. MUST always show graticule, dynamic scale (not fixed 0–3km), and north arrow on the composition.
-8. MUST render title in header when set; institutional footer with RealCarto/(R)EAT/FURG lines, author/responsible when set, and logo treatment; broken logo MUST keep text attribution.
-9. MUST drive preview aspect from paper size + orientation; DPI MUST feed capture scale math (`dpi/96`) used by later exporter.
-10. SHOULD extract preview pieces under `src/components/map/export/` for testability while keeping modal options usable on phone-width (scrollable options + preview).
+1. MUST lift basemap to controlled (or snapshot-readable) state from `LeafletMap` into `MapEditor` so open inherits viewport, hiddenIds, and basemap (ADR-006).
+2. MUST show a single discoverable Export entry only in owner `MapEditor` (`/editor/:mapId`); MUST NOT add export composition controls to `Gallery`, `PublicMapView`, or dashboard surfaces (ADR-002).
+3. MUST open `ExportMapShell` once (double-open does not spawn a second independent session); close/cancel discards ephemeral options and remount reopen recomputes defaults + fresh editor snapshot (ADR-003).
+4. MUST initialize session via task_01 factories from editor snapshot (map name → title, hiddenIds, basemap, center/zoom, elements freeze at open).
+5. MUST provide control groups: texts, format PNG/PDF, paper, orientation, DPI, legend position/format, layers, labels, basemap, location insets (0–2), mesh/colors; dense-legend PNG preference copy when legend is heavy or PDF selected per product rule.
+6. MUST debounce preview layout sync with optional explicit refresh (ADR-010); rapid option storms converge to last values.
+7. MUST run generation through task_01 `generateExport` with single-flight lock, progress UI, empty-title validation before capture, recoverable errors (memory/tiles), abort on close, retry after success allowed, filename from title + extension.
+8. MUST leave editor basemap/hiddenIds unchanged by export-only toggles after Cancel (session isolation).
+9. MUST keep auth failure paths consistent with product (expired session blocks private export) without exposing private elements through anonymous public APIs for composition.
+10. MUST deliver mobile layout: all control groups reachable at ~390×844 and landscape phone; touch-safe legend metrics (numeric fallback); title field remains operable with on-screen keyboard patterns.
+11. MUST implement and pass every assigned IT and E2E case in `## Tests` (Vitest/RTL journey equivalents when Playwright is absent).
 </requirements>
 
 ## Subtasks
-- [x] 3.1 Extract/build `CompositionPreview` paper frame driven by paper/orientation/DPI
-- [x] 3.2 Implement `LegendFrame` for inside (drag/resize clamp) and beside/below growth layouts
-- [x] 3.3 Wire legend appearance controls (columns, font, spacing) to live legend layout
-- [x] 3.4 Implement export visibility overlay + category/element toggles independent of editor
-- [x] 3.5 Implement global tags on preview for visible named elements
-- [x] 3.6 Align basemap URLs to editor (ArcGIS satellite); integrate native offline tiles; disable Offline on web
-- [x] 3.7 Replace fixed scale with dynamic scale; keep graticule and north always on
-- [x] 3.8 Complete institutional footer + logo asset wiring and live metadata reflection
-- [x] 3.9 Remove mandatory refresh no-op; coalesce rapid option updates coherently
-- [x] 3.10 Ensure phone-width scrollable options+preview layout
-- [x] 3.11 Implement all assigned unit/integration/E2E cases for this slice
+- [x] 3.1 Lift basemap state: `LeafletMap` controlled basemap prop + editor ownership of basemap for snapshot
+- [x] 3.2 Build `EditorExportSnapshot` at open and mount single `ExportMapShell`
+- [x] 3.3 Implement Export entry control in MapEditor header/chrome (Portuguese product copy)
+- [x] 3.4 Implement controls panel wiring all session fields to task_01 setters
+- [x] 3.5 Wire composition preview (task_02) with debounced sync + optional refresh action
+- [x] 3.6 Implement export/download action: title gate, single-flight, progress, error recovery, abort on close
+- [x] 3.7 Enforce cancel discard + reopen inheritance; isolate editor visibility/basemap from export-only edits
+- [x] 3.8 Verify Gallery/PublicMapView/dashboard remain free of export entry; no private compose deep-link route
+- [x] 3.9 Mobile responsive pass for shell (stack/scroll controls + inspectable preview)
+- [x] 3.10 Dense-legend PNG preference guidance copy
+- [x] 3.11 Implement assigned integration and E2E-level tests for owner/public journeys
 
 ## Implementation Details
-Start from `ExportMapModal.jsx` (GraticuleOverlay, MapOverlays, PreviewMap already present but incomplete). Align satellite with `LeafletMap.jsx` ArcGIS URL. Use `tileManager.js` for offline. TechSpec defaults and ADR-005/008/010 guide layout and capture-friendly tiles. Logo expected at `public/logo.png` (ensure asset present for footer).
+Follow TechSpec architecture diagram (`MapEditor` → `ExportEntry` → `ExportMapShell`), ADR-002/003/005/006/008/010/011, and sequencing steps 4 + 8–10. UI system: shadcn/Radix `dialog`, `button`, `input`, `label`, `select`, `radio-group`, `slider`, `scroll-area`, `checkbox` from `src/components/ui/*`; toasts via `sonner` if product errors use them. Data already loaded by editor (`api.entities.Map` / elements) — shell consumes props/snapshot only; do not call public gallery element endpoints for private owner maps. Do **not** restore PHP `export_settings` column flows from prior HEAD; session is client-only.
 
 ### Relevant Files
-- `src/components/map/ExportMapModal.jsx` — current composition UI and preview Leaflet instance
-- `src/components/map/LeafletMap.jsx` — authoritative online basemap URLs (Carto/OSM/ArcGIS)
-- `src/lib/tileManager.js` — `getLocalTileUrl`, tile helpers for offline
-- `src/components/map/iconSvgs.jsx` — point icon rendering for preview elements
-- `src/components/map/StylePanel.jsx` — dense control UX reference (Slider/Select/ScrollArea)
-- `src/lib/export/exportSettings.js` — settings model and `effectiveVisibleElements`
-- `src/page/MapEditor.jsx` — passes elements/settings into modal
-- `src/components/ui/switch.jsx`, `src/components/ui/checkbox.jsx`, `src/components/ui/slider.jsx` — controls for tags/visibility/appearance
-- `public/logo.png` — institutional logo (add if missing)
+- `src/page/MapEditor.jsx` — header actions, map/elements queries, hiddenIds; add Export entry + shell
+- `src/components/map/LeafletMap.jsx` — basemap lift (currently internal state in work tree)
+- `src/components/map/ElementLayersPanel.jsx` — basemap radio may need controlled wiring
+- `src/page/PublicMapView.jsx`, `src/page/Gallery.jsx`, `src/page/DashBoard.jsx` — must remain export-free
+- `src/App.jsx` — route table; no stand-alone private export route
+- `src/lib/AuthContext.jsx`, `src/components/ProtectedRoute.jsx` — owner session context
+- `src/components/ui/dialog.jsx` and form controls — shell chrome
+- `src/components/map/export/*` — composition from task_02
+- `src/lib/export/*` — session/generate/geo from task_01
+- `.compozy/tasks/exportar-mapa/_user_stories.md` — US-001–US-012 AC
 
 ### Dependent Files
-- `src/components/map/export/*` — new preview modules consumed by modal
-- `src/lib/export/pngExporter.js` — task_05 will capture the preview DOM this task owns
-- Location inset slots — task_04 will extend composition chrome
+- `src/components/map/ExportMapShell.jsx` (or `ExportMapModal.jsx` renamed to TechSpec shell) — create
+- `src/components/map/export/ExportControlsPanel.jsx` — create
+- `src/components/map/ExportEntry.jsx` (optional extraction) — create if separation helps
+- `src/page/MapEditor.jsx` — modify
+- `src/components/map/LeafletMap.jsx` — modify (controlled basemap)
+- `src/components/map/ElementLayersPanel.jsx` — modify if basemap lift requires
+- `tests/js/exportShell*.test.jsx`, `tests/js/exportEntry*.test.jsx`, `tests/js/exportAccess*.test.jsx` — ITs/E2E harnesses
 
 ### Related ADRs
-- [ADR-005: Legend Placement and Growing Composition Canvas](adrs/adr-005.md) — inside/beside/below
-- [ADR-006: Layer Visibility, Tags, and Export Gates](adrs/adr-006.md) — visibility, tags, chrome, basemaps, footer
-- [ADR-008: Independent Export Visibility Overlay](adrs/adr-008.md) — export visibility ≠ editor
-- [ADR-010: Composition Capture Stack and Cartographic Defaults](adrs/adr-010.md) — ArcGIS, paper frame, dynamic scale, default inside legend
+- [ADR-002: Owner-only export from the map editor](adrs/adr-002.md) — single entry, no public export
+- [ADR-003: Ephemeral export session configuration](adrs/adr-003.md) — discard on close
+- [ADR-005: Full mobile parity for export composition UX](adrs/adr-005.md) — phone complete controls
+- [ADR-006: Inherit editor map state into export session](adrs/adr-006.md) — viewport/layers/basemap
+- [ADR-008: Client-side capture with html-to-image and jsPDF](adrs/adr-008.md) — generate UX single-flight
+- [ADR-010: Debounced live preview with optional explicit refresh](adrs/adr-010.md) — shell preview policy
+- [ADR-011: Non-empty title required for download](adrs/adr-011.md) — shell validation UX
 
 ## Deliverables
-- Live composition preview matching configured legend, layers, tags, basemap, paper, chrome, and footer
-- Export visibility that does not mutate editor elements
-- Offline basemap selectable only on native with usable tile feedback
+- Owner editor export control opening a single ephemeral shell
+- Full composition controls + debounced preview + download PNG/PDF with progress/errors
+- Editor state isolation on cancel; reopen resets to defaults + fresh inheritance
+- No export on public/gallery surfaces
+- Mobile-reachable control groups
 - Every test case assigned in `## Tests` implemented and passing **(REQUIRED)**
 
 ## Tests
 
 Cases assigned from `_tests.md`, the test contract — read each ID's full definition there before writing tests.
 
-- [x] UT-011, UT-012, UT-013, UT-014, UT-015, UT-016, UT-017, UT-018, UT-019, UT-020 — metadata header/footer rendering and sanitization helpers
-- [x] UT-021, UT-022, UT-023, UT-024, UT-025, UT-026, UT-027, UT-028, UT-029, UT-030, UT-031, UT-032, UT-033, UT-034, UT-035, UT-036, UT-037, UT-038, UT-039, UT-040, UT-041, UT-042, UT-043 — legend position modes, growth, inside drag/resize clamps and restore
-- [x] UT-044, UT-045, UT-046, UT-047, UT-048, UT-049, UT-050, UT-051, UT-052, UT-053, UT-054, UT-055 — columns/font/spacing clamp and layout
-- [x] UT-056, UT-057, UT-058, UT-059, UT-060, UT-061, UT-062, UT-063, UT-064, UT-065, UT-066, UT-067, UT-068 — category/element visibility overlay and prune interactions with gates content rule
-- [x] UT-069, UT-070, UT-071, UT-072, UT-073, UT-074, UT-075, UT-076, UT-077, UT-078, UT-079, UT-080 — global tags behavior
-- [x] UT-081, UT-082, UT-083, UT-084, UT-085, UT-086, UT-087, UT-088, UT-089, UT-090, UT-091 — basemap URL resolution, web offline disabled, readiness flags
-- [x] UT-117, UT-118, UT-119, UT-120, UT-121, UT-122, UT-123, UT-124, UT-125, UT-126, UT-127 — paper/orientation/DPI aspect and scale factor helpers
-- [x] UT-128, UT-129, UT-130, UT-131, UT-132, UT-133, UT-134, UT-135, UT-136 — live preview model, loading/error status, coalesced updates
-- [x] UT-137, UT-138, UT-139, UT-140, UT-141, UT-142, UT-143, UT-144, UT-145 — institutional footer/logo (location IBGE credit completed in task_04)
-- [x] UT-187, UT-188 — dynamic scale calculator
-- [x] IT-021, IT-025, IT-027, IT-033, IT-036 — phone-width modal; native offline selectable; satellite+DPI progress; large paper capture loading; mobile layout stack
-- [x] E2E-003, E2E-004, E2E-005, E2E-006, E2E-007, E2E-008, E2E-009 — metadata, legend position/drag/appearance, visibility, tags, basemaps
-- [x] E2E-012, E2E-013, E2E-014 — paper/DPI, live preview without refresh, footer/logo
+### Entry, shell, auth
+- [x] IT-001, IT-002, IT-003, IT-004, IT-005 — open shell empty map, blank title, auth block, single session, large list scroll
+- [x] IT-020, IT-021 — public/gallery no export control; no private compose path without owner queries
+
+### Preview, branding, format, generation UX
+- [x] IT-010, IT-011, IT-012, IT-013, IT-014, IT-015, IT-016, IT-017 — preview sync, tiles fail, dense PNG hint, footer, empty title, filename, format retention, memory recovery
+
+### Layers / cancel isolation
+- [x] IT-022, IT-023, IT-024, IT-025 — layer toggles, cancel keeps editor basemap, labels export mock ok, open-snapshot freeze
+
+### Download lifecycle
+- [x] IT-050, IT-051, IT-052 — single-flight, abort on close, retry after success
+
+### Mobile
+- [x] IT-060, IT-061 — narrow/landscape control groups; title field operable
+
+### Session lifecycle
+- [x] IT-070, IT-071, IT-072, IT-073 — cancel discards, remount clears singleton, unmount aborts, document-hidden keeps in-memory while open
+
+### End-to-end journeys
+- [x] E2E-001, E2E-002, E2E-003, E2E-004, E2E-005, E2E-006, E2E-007, E2E-008, E2E-009 — owner open/cancel, auth, public absence, composition chrome, PNG/PDF download, cancel isolation, insets, mobile export, reload resets DPI
 
 ## Success Criteria
 - Every assigned test case implemented and passing
-- Beside/below legends never overlay the map frame; inside rect stays clamped
-- Preview basemap satellite uses ArcGIS; Offline unavailable on web
-- Scale label is resolution-dependent (not hardcoded 3km)
-- Hiding elements for export leaves the editor element array unchanged after modal close
+- Export control exists only for owner editor and opens one shell
+- Cancel discards options and does not permanently force export-only editor visibility/basemap
+- Download path shows progress, blocks double generate, recovers on failure, requires non-empty title
+- Gallery and public map views have zero export composition entry points
+- Mobile viewport can reach all control groups and export at moderate DPI under mocked tiles

@@ -620,6 +620,23 @@ function auth_delete_account(array $user, string $password, string $confirmPhras
     }
 
     $userId = (string) $fresh['id'];
+
+    if (($fresh['role'] ?? '') === 'admin') {
+        $otherActiveAdmins = db()->prepare(
+            'SELECT COUNT(*) FROM users WHERE role = :role AND status = :status AND id != :id'
+        );
+        $otherActiveAdmins->execute([
+            'role' => 'admin',
+            'status' => 'active',
+            'id' => $userId,
+        ]);
+        if ((int) $otherActiveAdmins->fetchColumn() === 0) {
+            auth_fail('validation_error', 'Validation failed.', 400, [
+                'confirm_phrase' => 'Cannot delete the last active administrator account.',
+            ]);
+        }
+    }
+
     delete_user_and_data($userId);
     destroy_current_session();
 

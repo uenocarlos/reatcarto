@@ -169,17 +169,46 @@ export class OfflineStore {
     if (pending.length <= 1) return pending[0] ?? null;
     pending.sort((a, b) => a.created_at.localeCompare(b.created_at));
     const hasDelete = pending.some((r) => r.op === 'delete');
-    const finalRow = hasDelete
-      ? pending.find((r) => r.op === 'delete') ?? pending[pending.length - 1]
-      : pending[pending.length - 1];
     const db = await getDb();
+
+    if (hasDelete) {
+      const finalRow = pending.find((r) => r.op === 'delete') ?? pending[pending.length - 1];
+      for (const row of pending) {
+        if (row.id !== finalRow.id) {
+          await db.delete('outbox', row.id);
+        }
+      }
+      const merged = { ...finalRow, payload: {} };
+      await db.put('outbox', merged);
+      return merged;
+    }
+
+    const createIdx = pending.findIndex((r) => r.op === 'create');
+    if (createIdx !== -1) {
+      const createRow = { ...pending[createIdx] };
+      for (let i = createIdx + 1; i < pending.length; i += 1) {
+        const later = pending[i];
+        if (later.op === 'update') {
+          createRow.payload = { ...createRow.payload, ...(later.payload ?? {}) };
+          if (later.base_version != null) {
+            createRow.base_version = later.base_version;
+          }
+        }
+      }
+      for (const row of pending) {
+        if (row.id !== createRow.id) {
+          await db.delete('outbox', row.id);
+        }
+      }
+      await db.put('outbox', createRow);
+      return createRow;
+    }
+
+    const finalRow = pending[pending.length - 1];
     for (const row of pending) {
       if (row.id !== finalRow.id) {
         await db.delete('outbox', row.id);
       }
-    }
-    if (finalRow.op === 'delete') {
-      await db.put('outbox', { ...finalRow, payload: {} });
     }
     return finalRow;
   }

@@ -2,33 +2,35 @@
 
 ## Objective Snapshot
 
-Preview de composição completo: módulos extraídos em `src/components/map/export/` + helpers em `src/lib/export/`; modal refatorado com preview vivo, visibilidade/tags, basemap ArcGIS/offline nativo, escala dinâmica, rodapé institucional.
+- Delivered owner-only export path: `ExportEntry` + ephemeral `ExportMapShell` wired in `MapEditor`.
+- All assigned IT/E2E cases (37 new + prior composition tests) passing.
 
 ## Important Decisions
 
-- Lógica testável em helpers puros; componentes React finos consomem `buildPreviewModel`.
-- Offline basemap via `OfflineTileLayer` + `tileManager.getLocalTileUrl`; desabilitado na web via `isOfflineBasemapAvailable`.
-- Satélite alinhado ao editor: ArcGIS World Imagery (não Google).
-- Logo em `public/logo.png` com fallback textual `(R)EAT` no `onError`.
+- Snapshot captured once on open (`exportSnapshot` state + `exportSessionKey` remount); avoids session reset on parent re-render.
+- Export shell session changes never write back to editor `basemap`/`hiddenIds` (isolation ADR-003/006).
+- `generateDeps` prop on shell for test I/O injection at capture boundary.
+- Dense-legend hint threshold: 80 items or PDF format (`DENSE_LEGEND_THRESHOLD` in `ExportControlsPanel`).
 
 ## Learnings
 
-- Vitest em `node` — testes E2E/IT desta task usam source-scan + helpers puros (padrão task_02).
-- `LOGO_PATH` constante em `institutionalFooter.js` aponta para `/logo.png`.
+- Radix `Slider`/`ScrollArea` require `ResizeObserver` stub in Vitest setup.
+- Dialog overlay blocks pointer events on entry button while open — use `fireEvent` or guard in harness for double-open tests.
+- Preview location inset removal requires debounce flush after control changes.
 
 ## Files / Surfaces
 
-- `src/lib/export/compositionMetadata.js`, `legendLayout.js`, `exportTags.js`, `basemapResolver.js`, `paperFrame.js`, `dynamicScale.js`, `previewModel.js`, `institutionalFooter.js`, `elementStyle.js`, `exportVisibility.js`
-- `src/components/map/export/*` (CompositionPreview, LegendFrame, PreviewMap, GraticuleOverlay, OfflineTileLayer, InstitutionalFooter, ExportVisibilityPanel)
-- `src/components/map/ExportMapModal.jsx` (refatorado)
-- `public/logo.png`
-- `tests/js/exportPreview.test.js` (127 casos UT/IT/E2E atribuídos)
+- `src/components/map/ExportMapShell.jsx`, `ExportEntry.jsx`
+- `src/components/map/export/ExportControlsPanel.jsx`, `exportShell.css`
+- `src/page/MapEditor.jsx`, `src/components/map/LeafletMap.jsx` (controlled basemap)
+- `tests/js/exportShell.test.jsx`, `exportEntry.test.jsx`, `exportAccess.test.jsx`, `exportE2E.test.jsx`, `helpers/exportHarness.jsx`
+- `tests/js/setup.js` (ResizeObserver/pointer stubs)
 
 ## Errors / Corrections
 
-- IT-025/E2E-014: asserts de source-scan ajustados para `OfflineTileLayer.jsx` e `LOGO_PATH` (não strings literais no modal).
+- Initial CSS import path wrong (`./exportShell.css` vs `@/components/map/export/exportShell.css`).
+- IT-050/051/072 needed `await Promise.resolve()` after async export start under fake timers.
 
 ## Ready for Next Run
 
-- task_04: slots de location inset no `CompositionPreview`; crédito IBGE completo no rodapé.
-- task_05: capturar DOM `#composition-preview` via `pngExporter`.
+- Feature complete for exportar-mapa PRD workflow; no task_04 in graph.

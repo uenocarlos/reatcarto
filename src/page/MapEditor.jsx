@@ -1,31 +1,36 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, FileDown, Share2, Layers, Download } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
-import { Share } from '@capacitor/share';
-import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Geolocation } from '@capacitor/geolocation';
-import { Capacitor } from '@capacitor/core';
 
 import LeafletMap from '@/components/map/LeafletMap';
 import MapToolbar from '@/components/map/MapToolbar';
 import StylePanel from '@/components/map/StylePanel';
 import ElementContextMenu from '@/components/map/ElementContextMenu';
 import GpsTracker from '@/components/map/GpsTracker';
-import ExportMapModal from '@/components/map/ExportMapModal';
 import { useAuth } from '@/lib/AuthContext';
 import { Badge } from '@/components/ui/badge';
 import ConflictResolutionModal from '@/components/map/ConflictResolutionModal';
 import { isOnline } from '@/lib/offline/connectivity';
 import { getOutboxSummary } from '@/lib/offline/offlineApi';
-import { canOpenExport, isExportEntryReady } from '@/lib/export/exportGates';
-import { createExportSettingsStore } from '@/lib/export/exportSettingsStore';
-import { defaultExportSettings } from '@/lib/export/exportSettings';
-import { createExportController } from '@/lib/export/exportController';
-import { ExportCaptureError } from '@/lib/export/pngExporter';
+import {
+  createEmptyHistory,
+  pushHistoryEntry,
+  popUndo,
+  popRedo,
+  snapshotElement,
+  snapshotsContentEqual,
+  createPayloadFromSnapshot,
+  updatePayloadFromSnapshot,
+} from '@/lib/elementHistory';
+import ExportEntry from '@/components/map/ExportEntry';
+import { createEditorExportSnapshot } from '@/lib/export/session';
+
+const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
 
 export default function MapEditor() {
   const { mapId } = useParams();
@@ -39,23 +44,40 @@ export default function MapEditor() {
   const [contextElement, setContextElement] = useState(null);
   const [copiedStyle, setCopiedStyle] = useState(null);
   const [copiedElement, setCopiedElement] = useState(null);
-  const [showExport, setShowExport] = useState(false);
-  const [exportSettings, setExportSettings] = useState(defaultExportSettings());
-  const exportSettingsStoreRef = useRef(null);
-  const exportModalHydratedRef = useRef(false);
-  const exportModalHydratedMapIdRef = useRef(null);
-  const exportControllerRef = useRef(null);
-  if (!exportControllerRef.current) {
-    exportControllerRef.current = createExportController();
-  }
-  const [isExporting, setIsExporting] = useState(false);
-  const [ownershipLost, setOwnershipLost] = useState(false);
   const [mapInstance, setMapInstance] = useState(null);
   const [gpsPoints, setGpsPoints] = useState([]);
   const [showGpsTracker, setShowGpsTracker] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [activeConflict, setActiveConflict] = useState(null);
-  const { getSyncEngine } = useAuth();
+  const [history, setHistory] = useState(createEmptyHistory);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const [basemap, setBasemap] = useState('branco');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportSessionKey, setExportSessionKey] = useState(0);
+  const [exportSnapshot, setExportSnapshot] = useState(null);
+  const historySilentRef = useRef(false);
+  const skipOpenEditorRef = useRef(false);
+  const pendingHistoryRef = useRef(null);
+  /** Snapshot do elemento no momento em que a edição abriu (antes de preview/geometria). */
+  const editingBaselineRef = useRef(null);
+  const elementsRef = useRef([]);
+  const historyRef = useRef(history);
+  const historyBusyRef = useRef(false);
+  const { getSyncEngine, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  // Histórico é por sessão de mapa (não persiste entre mapas)
+  useEffect(() => {
+    const empty = createEmptyHistory();
+    historyRef.current = empty;
+    setHistory(empty);
+    editingBaselineRef.current = null;
+    pendingHistoryRef.current = null;
+  }, [mapId]);
 
   const refreshPending = useCallback(async () => {
     try {
@@ -88,86 +110,24 @@ export default function MapEditor() {
   });
 
   useEffect(() => {
+    elementsRef.current = elements;
+  }, [elements]);
+
+  const commitHistory = useCallback((entry) => {
+    if (historySilentRef.current || !entry) return;
+    setHistory((prev) => {
+      const next = pushHistoryEntry(prev, entry);
+      historyRef.current = next;
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
     if (mapAuthError) {
-      setOwnershipLost(showExport);
       toast.error('Mapa não encontrado, acesso negado ou indisponível offline');
       navigate('/');
     }
-  }, [mapAuthError, navigate, showExport]);
-
-  const isOwner = Boolean(mapData && !mapAuthError);
-  const mapDataReady = Boolean(mapData);
-  const canOpen = canOpenExport({ isOwner, mapId });
-  const exportEntryReady = isExportEntryReady({ mapDataReady, mapId });
-
-  useEffect(() => {
-    if (!mapId) {
-      exportSettingsStoreRef.current = null;
-      return;
-    }
-    exportSettingsStoreRef.current = createExportSettingsStore({
-      mapId,
-      persist: async (settings) => {
-        const updated = await api.entities.Map.update(mapId, { export_settings: settings });
-        queryClient.setQueryData(['map', mapId], updated);
-        return updated;
-      },
-    });
-  }, [mapId, queryClient]);
-
-  useEffect(() => {
-    if (!showExport) {
-      exportModalHydratedRef.current = false;
-      exportModalHydratedMapIdRef.current = null;
-      return;
-    }
-    if (!mapId || !mapData || !exportSettingsStoreRef.current) return;
-
-    const shouldHydrate =
-      !exportModalHydratedRef.current || exportModalHydratedMapIdRef.current !== mapId;
-    if (!shouldHydrate) return;
-
-    const hydrated = exportSettingsStoreRef.current.hydrate(
-      mapId,
-      mapData.export_settings,
-      elements
-    );
-    setExportSettings(hydrated);
-    exportModalHydratedRef.current = true;
-    exportModalHydratedMapIdRef.current = mapId;
-  }, [showExport, mapId, mapData]);
-
-  useEffect(() => {
-    if (!showExport || !mapId || !exportSettingsStoreRef.current) return;
-    if (!exportModalHydratedRef.current) return;
-    if (isExporting) return;
-
-    setExportSettings(exportSettingsStoreRef.current.updateSettings({}, elements));
-  }, [showExport, mapId, elements, isExporting]);
-
-  const handleOpenExport = useCallback(() => {
-    if (!canOpen || !exportEntryReady) return;
-    setShowExport(true);
-  }, [canOpen, exportEntryReady]);
-
-  const handleCloseExport = useCallback(async () => {
-    exportControllerRef.current?.abortExport();
-    try {
-      await exportSettingsStoreRef.current?.flush();
-    } catch {
-      /* session memory retained per ADR-007 */
-    }
-    setShowExport(false);
-    setIsExporting(false);
-  }, []);
-
-  const handleExportSettingsChange = useCallback(
-    (partial) => {
-      if (!exportSettingsStoreRef.current || isExporting) return;
-      setExportSettings(exportSettingsStoreRef.current.updateSettings(partial, elements));
-    },
-    [elements, isExporting]
-  );
+  }, [mapAuthError, navigate]);
 
   useEffect(() => {
     refreshPending();
@@ -195,33 +155,171 @@ export default function MapEditor() {
     mutationFn: (data) => api.entities.MapElement.create(data),
     onSuccess: (newEl) => {
       queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
-      setEditingElement({ ...newEl, _isNew: true });
+      if (!historySilentRef.current) {
+        commitHistory({ type: 'create', element: snapshotElement(newEl) });
+      }
+      if (skipOpenEditorRef.current) {
+        skipOpenEditorRef.current = false;
+        editingBaselineRef.current = null;
+      } else if (!historySilentRef.current) {
+        const snap = snapshotElement(newEl);
+        editingBaselineRef.current = snap;
+        setEditingElement({ ...newEl, _isNew: true });
+      }
+    },
+    onError: (err) => {
+      skipOpenEditorRef.current = false;
+      toast.error(err.message || 'Falha ao criar elemento');
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) =>
-      api.entities.MapElement.update(id, { ...data, base_version: editingElement?.version }),
-    onSuccess: () => {
+    mutationFn: ({ id, data }) => {
+      const { base_version, ...rest } = data;
+      const current = elementsRef.current.find((e) => String(e.id) === String(id));
+      return api.entities.MapElement.update(id, {
+        ...rest,
+        base_version: base_version ?? current?.version ?? editingElement?.version,
+      });
+    },
+    onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
-      setEditingElement(null);
-      toast.success('Elemento salvo!');
+      if (!historySilentRef.current && pendingHistoryRef.current?.type === 'update') {
+        commitHistory(pendingHistoryRef.current);
+      }
+      pendingHistoryRef.current = null;
+      editingBaselineRef.current = null;
+      if (!historySilentRef.current) {
+        setEditingElement(null);
+        if (!variables?._silentToast) {
+          toast.success('Elemento salvo!');
+        }
+      }
     },
     onError: (err) => {
+      pendingHistoryRef.current = null;
       toast.error(err.message || 'Falha ao salvar elemento');
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => {
-      const el = elements.find((e) => e.id === id);
-      return api.entities.MapElement.delete(id, el?.version);
+    mutationFn: ({ id, version }) => {
+      const el = elementsRef.current.find((e) => String(e.id) === String(id));
+      return api.entities.MapElement.delete(id, version ?? el?.version);
     },
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
-      toast.success('Elemento excluído!');
+      if (!historySilentRef.current && pendingHistoryRef.current?.type === 'delete') {
+        commitHistory(pendingHistoryRef.current);
+      } else if (!historySilentRef.current && variables?.elementSnapshot) {
+        commitHistory({ type: 'delete', element: variables.elementSnapshot });
+      }
+      pendingHistoryRef.current = null;
+      if (!historySilentRef.current && !variables?._silentToast) {
+        toast.success('Elemento excluído!');
+      }
+      setEditingElement((prev) =>
+        prev && String(prev.id) === String(variables?.id) ? null : prev
+      );
+    },
+    onError: (err) => {
+      pendingHistoryRef.current = null;
+      toast.error(err.message || 'Falha ao excluir elemento');
     },
   });
+
+  const findElementVersion = useCallback((id) => {
+    const el = elementsRef.current.find((e) => String(e.id) === String(id));
+    return el?.version;
+  }, []);
+
+  const applyHistoryEntry = useCallback(
+    async (entry, direction) => {
+      if (!entry || historyBusyRef.current) return false;
+      historyBusyRef.current = true;
+      setHistoryBusy(true);
+      historySilentRef.current = true;
+      skipOpenEditorRef.current = true;
+      editingBaselineRef.current = null;
+      try {
+        const invert = direction === 'undo';
+        if (entry.type === 'create') {
+          if (invert) {
+            const id = entry.element.id;
+            await api.entities.MapElement.delete(id, findElementVersion(id) ?? entry.element.version);
+          } else {
+            const created = await api.entities.MapElement.create(
+              createPayloadFromSnapshot(entry.element)
+            );
+            entry.element = snapshotElement(created);
+          }
+        } else if (entry.type === 'delete') {
+          if (invert) {
+            const created = await api.entities.MapElement.create(
+              createPayloadFromSnapshot(entry.element)
+            );
+            entry.element = snapshotElement(created);
+          } else {
+            const id = entry.element.id;
+            await api.entities.MapElement.delete(id, findElementVersion(id) ?? entry.element.version);
+          }
+        } else if (entry.type === 'update') {
+          const snap = invert ? entry.before : entry.after;
+          if (!snap) {
+            toast.error('Histórico incompleto para esta ação');
+            return false;
+          }
+          const id = entry.id ?? snap.id;
+          const current = elementsRef.current.find((e) => String(e.id) === String(id));
+          if (!current) {
+            toast.error('Elemento não encontrado para desfazer/refazer');
+            return false;
+          }
+          await api.entities.MapElement.update(id, {
+            ...updatePayloadFromSnapshot(snap),
+            base_version: current.version,
+          });
+          entry.id = id;
+        }
+        await queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
+        setEditingElement(null);
+        return true;
+      } catch (err) {
+        toast.error(err.message || 'Não foi possível desfazer/refazer');
+        return false;
+      } finally {
+        historySilentRef.current = false;
+        skipOpenEditorRef.current = false;
+        historyBusyRef.current = false;
+        setHistoryBusy(false);
+      }
+    },
+    [findElementVersion, mapId, queryClient]
+  );
+
+  const handleUndo = useCallback(async () => {
+    if (historyBusyRef.current) return;
+    const current = historyRef.current;
+    if (!current.undo.length) return;
+    const { entry, history: next } = popUndo(current);
+    const ok = await applyHistoryEntry(entry, 'undo');
+    if (ok) {
+      historyRef.current = next;
+      setHistory(next);
+    }
+  }, [applyHistoryEntry]);
+
+  const handleRedo = useCallback(async () => {
+    if (historyBusyRef.current) return;
+    const current = historyRef.current;
+    if (!current.redo.length) return;
+    const { entry, history: next } = popRedo(current);
+    const ok = await applyHistoryEntry(entry, 'redo');
+    if (ok) {
+      historyRef.current = next;
+      setHistory(next);
+    }
+  }, [applyHistoryEntry]);
 
   // Handle new element creation from map
   const handleNewElement = useCallback((type, geojson) => {
@@ -237,6 +335,7 @@ export default function MapEditor() {
       name: '',
       description: '',
       element_category: 'terra',
+      is_publicly_visible: true,
       style: JSON.stringify(type === 'point' ? { icon_name: 'pin', icon_color: '#F97316' } : type === 'line' ? { color: '#F97316', opacity: 100, weight: 3, dash_style: 'solid' } : { border_color: '#F97316', border_opacity: 100, border_weight: 2, border_dash: 'solid', fill_color: '#FED7AA', fill_opacity: 40 }),
     });
     setActiveTool('select');
@@ -361,36 +460,144 @@ export default function MapEditor() {
   };
 
   const handleEdit = () => {
+    if (!contextElement) return;
+    // Captura estado original ANTES de preview de estilo / arrasto de vértices
+    editingBaselineRef.current = snapshotElement(contextElement);
     setEditingElement(contextElement);
     setContextMenu(null);
+    const type = contextElement?.element_type;
+    if (type === 'point') {
+      toast.info('Arraste o ponto no mapa para reposicionar. Salve no painel.');
+    } else if (type === 'line' || type === 'polygon') {
+      toast.info('Arraste os vértices (círculos brancos) para ajustar a geometria. Salve no painel.');
+    }
   };
 
   const handleDelete = () => {
-    deleteMutation.mutate(contextElement.id);
+    if (!contextElement) return;
+    pendingHistoryRef.current = {
+      type: 'delete',
+      element: snapshotElement(contextElement),
+    };
+    deleteMutation.mutate({
+      id: contextElement.id,
+      version: contextElement.version,
+      elementSnapshot: snapshotElement(contextElement),
+    });
     setContextMenu(null);
     setContextElement(null);
   };
 
   const handleCopy = () => {
+    if (contextElement?.element_type !== 'point') return;
     setCopiedElement(contextElement);
     setContextMenu(null);
     toast.success('Elemento copiado! Clique no mapa para colar');
   };
 
+  const handlePasteElement = useCallback((coords) => {
+    if (!copiedElement || copiedElement.element_type !== 'point') return;
+    if (isEditingNew) {
+      toast.error('Salve ou cancele o elemento atual antes de colar');
+      return;
+    }
+    const geojson = { type: 'Point', coordinates: [coords[1], coords[0]] };
+    const style =
+      typeof copiedElement.style === 'string'
+        ? copiedElement.style
+        : JSON.stringify(copiedElement.style ?? {});
+    createMutation.mutate({
+      map_id: mapId,
+      element_type: 'point',
+      geojson: JSON.stringify(geojson),
+      name: copiedElement.name || '',
+      description: copiedElement.description || '',
+      element_category: copiedElement.element_category || 'terra',
+      style,
+      is_publicly_visible:
+        copiedElement.is_publicly_visible !== false && copiedElement.is_publicly_visible !== 0,
+    });
+    setCopiedElement(null);
+    toast.success('Ponto colado!');
+  }, [copiedElement, isEditingNew, mapId, createMutation]);
+
+  const handleGeometryChange = useCallback((geojsonObj) => {
+    if (!editingElement) return;
+    const geojson = typeof geojsonObj === 'string' ? geojsonObj : JSON.stringify(geojsonObj);
+    setEditingElement((prev) => (prev ? { ...prev, geojson } : null));
+    queryClient.setQueryData(['elements', mapId], (old = []) =>
+      old.map((el) =>
+        String(el.id) === String(editingElement.id) ? { ...el, geojson } : el
+      )
+    );
+  }, [editingElement, mapId, queryClient]);
+
   const handleCopyStyle = () => {
-    setCopiedStyle({ type: contextElement.element_type, style: contextElement.style, icon_name: contextElement.icon_name, icon_color: contextElement.icon_color, custom_icon_url: contextElement.custom_icon_url });
+    if (!contextElement) return;
+    const styleStr =
+      typeof contextElement.style === 'string'
+        ? contextElement.style
+        : JSON.stringify(contextElement.style ?? {});
+    setCopiedStyle({
+      type: contextElement.element_type,
+      style: styleStr,
+      name: contextElement.name || '',
+      description: contextElement.description || '',
+      element_category: contextElement.element_category || 'terra',
+      is_publicly_visible:
+        contextElement.is_publicly_visible !== false && contextElement.is_publicly_visible !== 0,
+    });
     setContextMenu(null);
-    toast.success('Formatação copiada!');
+    setContextElement(null);
+    toast.success('Formatação copiada! Cole uma vez em outro elemento do mesmo tipo.');
   };
 
   const handlePasteStyle = () => {
-    if (!copiedStyle || copiedStyle.type !== contextElement.element_type) return;
+    if (!contextElement || !copiedStyle) return;
+    if (copiedStyle.type !== contextElement.element_type) {
+      toast.error('Só é possível colar formatação entre elementos do mesmo tipo (ponto/linha/polígono).');
+      setContextMenu(null);
+      return;
+    }
+    const styleStr =
+      typeof copiedStyle.style === 'string'
+        ? copiedStyle.style
+        : JSON.stringify(copiedStyle.style ?? {});
+    const targetId = contextElement.id;
+    const patch = {
+      style: styleStr,
+      name: copiedStyle.name ?? contextElement.name ?? '',
+      description: copiedStyle.description ?? contextElement.description ?? '',
+      element_category: copiedStyle.element_category ?? contextElement.element_category ?? 'terra',
+      is_publicly_visible:
+        copiedStyle.is_publicly_visible !== false && copiedStyle.is_publicly_visible !== 0,
+    };
+
+    // Pré-visualização imediata no mapa
+    queryClient.setQueryData(['elements', mapId], (old = []) =>
+      old.map((el) =>
+        String(el.id) === String(targetId) ? { ...el, ...patch } : el
+      )
+    );
+
+    const before = snapshotElement(contextElement);
+    const after = snapshotElement({ ...contextElement, ...patch });
+    pendingHistoryRef.current = {
+      type: 'update',
+      id: targetId,
+      before,
+      after,
+    };
     updateMutation.mutate({
-      id: contextElement.id,
-      data: { style: copiedStyle.style, icon_name: copiedStyle.icon_name, icon_color: copiedStyle.icon_color, custom_icon_url: copiedStyle.custom_icon_url },
+      id: targetId,
+      data: {
+        ...patch,
+        base_version: contextElement.version,
+      },
     });
+    setCopiedStyle(null);
     setContextMenu(null);
-    toast.success('Formatação colada!');
+    setContextElement(null);
   };
 
   // Real-time preview: merge style changes into local elements list instantly
@@ -401,206 +608,97 @@ export default function MapEditor() {
   }, [editingElement, mapId, queryClient]);
 
   const handleStyleSave = (data) => {
-    updateMutation.mutate({ id: editingElement.id, data });
-  };
+    if (!editingElement) return;
+    // Nunca usar o cache com preview: o "antes" é o estado ao abrir a edição
+    const live =
+      elementsRef.current.find((e) => String(e.id) === String(editingElement.id)) || editingElement;
+    const before =
+      editingBaselineRef.current ||
+      snapshotElement({
+        ...live,
+        // sem geojson/style do preview (fallback raro se baseline sumiu)
+        geojson: live.geojson,
+        style: live.style,
+      });
 
-  const handleExport = async (config, previewElement) => {
-    const controller = exportControllerRef.current;
-    if (!controller || controller.getIsExporting()) return;
-
-    if (ownershipLost || !isOwner) {
-      toast.error('Você não tem permissão para exportar este mapa.');
-      return;
-    }
-
-    setIsExporting(true);
-    const frozenElements = elements;
-
-    try {
-      await exportSettingsStoreRef.current?.flush();
-    } catch {
-      /* continue with in-memory settings */
-    }
-
-    const toastId = toast.loading('Gerando arquivo...');
-
-    const result = await controller.attemptExport({
-      settings: config,
-      previewEl: previewElement,
-      elements: frozenElements,
-      canExport: isOwner && !ownershipLost,
-      fileBaseName: config.title || 'mapa',
+    const after = snapshotElement({
+      ...before,
+      ...data,
+      id: editingElement.id,
+      map_id: editingElement.map_id ?? before.map_id,
+      element_type: editingElement.element_type ?? before.element_type,
+      geojson: editingElement.geojson,
+      version: editingElement.version ?? before.version,
+      style:
+        typeof data.style === 'string'
+          ? data.style
+          : data.style != null
+            ? JSON.stringify(data.style)
+            : before.style,
     });
 
-    toast.dismiss(toastId);
-    setIsExporting(false);
-
-    if (result.status === 'blocked') {
-      return;
+    if (snapshotsContentEqual(before, after)) {
+      pendingHistoryRef.current = null;
+    } else {
+      pendingHistoryRef.current = {
+        type: 'update',
+        id: editingElement.id,
+        before,
+        after,
+      };
     }
+    updateMutation.mutate({
+      id: editingElement.id,
+      data: {
+        ...data,
+        geojson: editingElement.geojson,
+      },
+    });
+  };
 
-    if (result.status === 'rejected') {
-      return;
-    }
-
-    if (result.status === 'aborted' || result.status === 'cancelled') {
-      return;
-    }
-
-    if (result.status === 'error') {
-      const message =
-        result.error instanceof ExportCaptureError
-          ? result.error.message
-          : 'Falha ao exportar o mapa. Verifique a conexão com as camadas base.';
-      toast.error(message);
-      return;
-    }
-
-    if (result.status === 'success') {
-      toast.success('Mapa exportado com sucesso!');
-      setShowExport(false);
-    }
+  const handleStyleClose = () => {
+    // Descarta geometria / estilo pré-visualizado sem salvar
+    editingBaselineRef.current = null;
+    queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
+    setEditingElement(null);
   };
 
   const center = mapData ? [mapData.center_lat || -32.035, mapData.center_lng || -52.1] : [-32.035, -52.1];
   const zoom = mapData?.zoom || 13;
 
-  const handleExportGeoJSON = async () => {
-    if (elements.length === 0) {
-      toast.error('Nenhum dado para exportar');
+  const buildExportSnapshot = useCallback(() => {
+    const mapCenter = mapInstance?.getCenter?.();
+    const mapZoom = mapInstance?.getZoom?.();
+    return createEditorExportSnapshot({
+      mapName: mapData?.name ?? '',
+      center: mapCenter
+        ? { lat: mapCenter.lat, lng: mapCenter.lng }
+        : { lat: center[0], lng: center[1] },
+      zoom: Number.isFinite(mapZoom) ? mapZoom : zoom,
+      hiddenIds,
+      basemap,
+      elements,
+    });
+  }, [mapInstance, mapData?.name, center, zoom, hiddenIds, basemap, elements]);
+
+  const handleOpenExport = useCallback(() => {
+    if (exportOpen) return;
+    if (!isAuthenticated || mapAuthError) {
+      toast.error('Sessão expirada. Faça login novamente para exportar.');
       return;
     }
+    if (!mapData) return;
+    setExportSnapshot(buildExportSnapshot());
+    setExportSessionKey((key) => key + 1);
+    setExportOpen(true);
+  }, [exportOpen, isAuthenticated, mapAuthError, mapData, buildExportSnapshot]);
 
-    const toastId = toast.loading('Preparando GeoJSON com ícones...');
-
-    try {
-      const getBase64Svg = async (iconName, color) => {
-        let svgText = '';
-        if (iconName && (iconName.startsWith('/') || iconName.startsWith('http') || iconName.endsWith('.svg'))) {
-          try {
-            const response = await fetch(iconName);
-            svgText = await response.text();
-            
-            // Força a cor no SVG injetando fill e removendo cores fixas
-            if (color) {
-              // Remove qualquer estilo interno que possa sobrescrever a cor
-              svgText = svgText.replace(/<style[\s\S]*?<\/style>/gi, '');
-              // Remove fills existentes para forçar o novo
-              svgText = svgText.replace(/fill="[^"]*"/g, '');
-              // Injeta o novo fill na tag svg
-              svgText = svgText.replace('<svg', `<svg fill="${color}"`);
-              // Também garante que caminhos (paths) herdem a cor
-              svgText = svgText.replace(/<path/g, `<path fill="${color}"`);
-            }
-          } catch (e) {
-            console.error('Error fetching icon', e);
-            return null;
-          }
-        } else {
-          const fn = ICON_SVGS[iconName] || ICON_SVGS.pin;
-          svgText = fn(color || '#F97316');
-        }
-        
-        // Converte para Base64 com suporte a Unicode
-        const base64 = btoa(unescape(encodeURIComponent(svgText)));
-        return `data:image/svg+xml;base64,${base64}`;
-      };
-
-      const features = await Promise.all(elements.map(async el => {
-        const geometry = typeof el.geojson === 'string' ? JSON.parse(el.geojson) : el.geojson;
-        const style = typeof el.style === 'string' ? JSON.parse(el.style) : el.style;
-        
-        // Mapeamento exato para o padrão solicitado
-        const isPoint = el.element_type === 'point';
-        const isLine = el.element_type === 'line';
-        const isPolygon = el.element_type === 'polygon';
-
-        const currentColor = isPoint ? (style.icon_color || "#F97316") : (isLine ? (style.color || "#F97316") : (style.border_color || "#F97316"));
-
-        const properties = {
-          Name: el.name || "",
-          Tipo: el.element_category || (isPoint ? "Ponto" : isLine ? "Linha" : "Polígono"),
-          color: currentColor,
-          weight: String(isPoint ? 0 : (isLine ? (style.weight || 3) : (style.border_weight || 2))),
-          mapa_id: parseInt(mapId),
-          opacity: String((isLine ? (style.opacity || 100) : (isPolygon ? (style.border_opacity || 100) : 100)) / 100),
-          fillColor: isPolygon ? (style.fill_color || "#FED7AA") : "",
-          fillOpacity: isPolygon ? String((style.fill_opacity || 40) / 100) : "",
-          Visibilidade: "Sim",
-          popupContent: el.description || "",
-          size: "medium",
-          weight_label: "medium"
-        };
-
-        if (isPoint) {
-          const iconUrl = await getBase64Svg(style.icon_name, currentColor);
-          if (iconUrl) {
-            properties.icon = {
-              options: {
-                iconUrl: iconUrl,
-                iconSize: ["medium", "medium"]
-              }
-            };
-          }
-          properties.icon_name = style.icon_name;
-        }
-
-        // Adiciona dashArray se houver estilo de linha
-        if (style.dash_style === 'dashed' || style.border_dash === 'dashed') {
-          properties.dashArray = [10, 10];
-        } else if (style.dash_style === 'dash-dot' || style.border_dash === 'dash-dot') {
-          properties.dashArray = [15, 10, 1, 10];
-        }
-
-        return {
-          type: 'Feature',
-          geometry,
-          properties,
-          id: el.id
-        };
-      }));
-
-      const featureCollection = {
-        type: 'FeatureCollection',
-        features
-      };
-
-      const geojsonString = JSON.stringify(featureCollection, null, 2);
-      const fileName = `mapa_${mapId}_${new Date().getTime()}.geojson`;
-
-      if (Capacitor.isNativePlatform()) {
-        // Grava o arquivo GeoJSON no sistema de arquivos do celular (Cache)
-        const savedFile = await Filesystem.writeFile({
-          path: fileName,
-          data: geojsonString,
-          directory: Directory.Cache,
-          encoding: 'utf8' 
-        });
-
-        // Compartilha o arquivo físico usando o plugin Share
-        await Share.share({
-          files: [savedFile.uri], 
-          dialogTitle: 'Enviar Arquivo GeoJSON',
-        });
-      } else {
-        const blob = new Blob([geojsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        toast.success('GeoJSON baixado com sucesso!');
-      }
-      toast.dismiss(toastId);
-    } catch (error) {
-      console.error('Falha ao exportar GeoJSON:', error);
-      toast.dismiss(toastId);
-      toast.error('Erro ao exportar arquivo');
-    }
-  };
+  const pasteEnabled =
+    !!copiedElement &&
+    copiedElement.element_type === 'point' &&
+    activeTool === 'select' &&
+    !drawingMode &&
+    !editingElement;
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden overscroll-none">
@@ -624,32 +722,13 @@ export default function MapEditor() {
             <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider font-semibold">Gerador de Mapas</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          {canOpen && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 gap-1.5 shadow-sm border-primary/20 hover:bg-primary/5"
-              onClick={handleOpenExport}
-              disabled={!exportEntryReady}
-              title={exportEntryReady ? 'Exportar mapa como PNG' : 'Carregando mapa...'}
-              data-testid="export-map-button"
-            >
-              <FileDown className="w-4 h-4 text-primary" />
-              <span className="hidden sm:inline">{exportEntryReady ? 'Exportar' : 'Carregando...'}</span>
-            </Button>
-          )}
-          <Button
-            variant="outline" 
-            size="sm" 
-            className="h-9 gap-1.5 shadow-sm border-primary/20 hover:bg-primary/5"
-            onClick={handleExportGeoJSON}
-            title="Baixar todos os dados em GeoJSON"
-          >
-            <Download className="w-4 h-4 text-primary" />
-            <span className="hidden sm:inline">GeoJSON</span>
-          </Button>
-        </div>
+        {mapData ? (
+          <ExportEntry
+            onOpen={handleOpenExport}
+            disabled={!isAuthenticated || mapAuthError}
+            disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+          />
+        ) : null}
       </div>
 
       {/* Toolbar */}
@@ -670,6 +749,18 @@ export default function MapEditor() {
           {drawingMode === 'gps-track' && 'Rastreamento GPS ativo'}
         </div>
       )}
+      {editingElement && !drawingMode && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-card border px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
+          {editingElement.element_type === 'point'
+            ? 'Arraste o ponto para reposicionar · Salve no painel'
+            : 'Arraste os vértices para ajustar a geometria · Salve no painel'}
+        </div>
+      )}
+      {pasteEnabled && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-primary text-primary-foreground px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
+          Clique no mapa para colar o ponto copiado
+        </div>
+      )}
 
       {/* Map */}
       <div className="flex-1 relative" style={{ minHeight: 0 }}>
@@ -685,8 +776,34 @@ export default function MapEditor() {
           onElementLongPress={handleElementLongPress}
           gpsPoints={gpsPoints}
           onMapInstance={setMapInstance}
+          editingElementId={editingElement?.id ?? null}
+          onGeometryChange={handleGeometryChange}
+          pasteEnabled={pasteEnabled}
+          onPasteAt={handlePasteElement}
+          canUndo={!historyBusy && history.undo.length > 0}
+          canRedo={!historyBusy && history.redo.length > 0}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          hiddenIds={hiddenIds}
+          onHiddenIdsChange={setHiddenIds}
+          basemap={basemap}
+          onBasemapChange={setBasemap}
         />
       </div>
+
+      {exportOpen && exportSnapshot ? (
+        <Suspense fallback={null}>
+          <ExportMapShell
+            key={exportSessionKey}
+            open={exportOpen}
+            onOpenChange={(open) => {
+              setExportOpen(open);
+              if (!open) setExportSnapshot(null);
+            }}
+            snapshot={exportSnapshot}
+          />
+        </Suspense>
+      ) : null}
 
       {/* GPS Tracker */}
       <GpsTracker
@@ -700,8 +817,20 @@ export default function MapEditor() {
         <StylePanel
           element={editingElement}
           onSave={handleStyleSave}
-          onDelete={(id) => deleteMutation.mutate(id)}
-          onClose={() => setEditingElement(null)}
+          onDelete={(id) => {
+            const el =
+              elementsRef.current.find((e) => String(e.id) === String(id)) || editingElement;
+            pendingHistoryRef.current = {
+              type: 'delete',
+              element: snapshotElement(el),
+            };
+            deleteMutation.mutate({
+              id,
+              version: el?.version,
+              elementSnapshot: snapshotElement(el),
+            });
+          }}
+          onClose={handleStyleClose}
           onPreview={handleStylePreview}
         />
       )}
@@ -719,20 +848,6 @@ export default function MapEditor() {
         onPasteStyle={handlePasteStyle}
         onClose={() => { setContextMenu(null); setContextElement(null); }}
       />
-
-      {canOpen && mapId && (
-        <ExportMapModal
-          open={showExport}
-          onClose={handleCloseExport}
-          onExport={handleExport}
-          elements={elements}
-          settings={exportSettings}
-          onSettingsChange={handleExportSettingsChange}
-          ownershipLost={ownershipLost}
-          isExporting={isExporting}
-          mapId={mapId}
-        />
-      )}
 
       <ConflictResolutionModal
         conflict={activeConflict}

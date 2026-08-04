@@ -3,6 +3,47 @@
 declare(strict_types=1);
 
 /**
+ * Interpreta flags booleanas vindas de JSON/PDO (bool, int, string).
+ */
+function parse_bool_input(mixed $value, bool $default = true): bool
+{
+    if ($value === null) {
+        return $default;
+    }
+    if (is_bool($value)) {
+        return $value;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (int) $value !== 0;
+    }
+    if (is_string($value)) {
+        $normalized = strtolower(trim($value));
+        if (in_array($normalized, ['1', 'true', 't', 'yes', 'y', 'sim', 'on'], true)) {
+            return true;
+        }
+        if (in_array($normalized, ['0', 'false', 'f', 'no', 'n', 'nao', 'não', 'off', ''], true)) {
+            return false;
+        }
+    }
+
+    return $default;
+}
+
+/**
+ * Elemento aparece em mapas publicados (galeria), a menos que marcado como oculto.
+ *
+ * @param array<string, mixed> $row
+ */
+function element_is_publicly_visible(array $row): bool
+{
+    if (!array_key_exists('is_publicly_visible', $row)) {
+        return true;
+    }
+
+    return parse_bool_input($row['is_publicly_visible'], true);
+}
+
+/**
  * @param array<string, mixed> $row
  * @return array<string, mixed>
  */
@@ -24,11 +65,45 @@ function format_element_record(array $row, array $photos = []): array
         'description' => (string) ($row['description'] ?? ''),
         'element_category' => (string) ($row['element_category'] ?? ''),
         'style' => $style,
+        'is_publicly_visible' => element_is_publicly_visible($row),
         'author_id' => (string) $row['author_id'],
         'version' => (int) $row['version'],
         'created_at' => (string) $row['created_at'],
         'updated_at' => (string) $row['updated_at'],
         'photos' => $photos,
+    ];
+}
+
+/**
+ * @param array<string, mixed> $row
+ * @param array<int, array<string, mixed>> $photos
+ * @return array<string, mixed>
+ */
+function format_public_element_record(array $row, array $photos = []): array
+{
+    $geojson = geojson_from_row((string) $row['geojson']);
+    $style = $row['style'];
+    if (is_string($style)) {
+        $decodedStyle = json_decode($style, true);
+        $style = is_array($decodedStyle) ? $decodedStyle : [];
+    }
+
+    $safePhotos = array_map(static function (array $p): array {
+        unset($p['owner_id'], $p['element_id']);
+        return $p;
+    }, $photos);
+
+    return [
+        'id' => (string) $row['id'],
+        'element_type' => (string) $row['element_type'],
+        'geojson' => $geojson,
+        'name' => (string) $row['name'],
+        'description' => (string) ($row['description'] ?? ''),
+        'element_category' => (string) ($row['element_category'] ?? ''),
+        'style' => $style,
+        'created_at' => (string) $row['created_at'],
+        'updated_at' => (string) $row['updated_at'],
+        'photos' => $safePhotos,
     ];
 }
 
@@ -178,10 +253,15 @@ function elements_create(array $user, array $input): array
     if (is_array($style)) {
         $style = json_encode($style, JSON_UNESCAPED_UNICODE);
     }
+    $isPubliclyVisible = array_key_exists('is_publicly_visible', $input)
+        ? parse_bool_input($input['is_publicly_visible'], true)
+        : true;
 
     try {
         $stmt = db()->prepare(
-            'INSERT INTO map_elements (map_id, element_type, geom, name, description, element_category, style, author_id)
+            'INSERT INTO map_elements (
+                map_id, element_type, geom, name, description, element_category, style, is_publicly_visible, author_id
+             )
              VALUES (
                 :map_id,
                 :element_type,
@@ -190,6 +270,7 @@ function elements_create(array $user, array $input): array
                 :description,
                 :element_category,
                 :style::jsonb,
+                :is_publicly_visible,
                 :author_id
              )
              RETURNING id'
@@ -202,6 +283,7 @@ function elements_create(array $user, array $input): array
             'description' => $description,
             'element_category' => $category,
             'style' => (string) $style,
+            'is_publicly_visible' => $isPubliclyVisible ? 't' : 'f',
             'author_id' => $user['id'],
         ]);
     } catch (Throwable) {
@@ -222,7 +304,7 @@ function elements_create(array $user, array $input): array
     return $result;
 }
 
-function elements_update(array $user, array $input): array
+function elements_update(array $user, array $input, bool $forceVersion = false): array
 {
     $elementId = (string) ($input['id'] ?? '');
     $clientMutationId = trim((string) ($input['client_mutation_id'] ?? ''));
@@ -245,7 +327,6 @@ function elements_update(array $user, array $input): array
     assert_element_owner($user, $element, false);
 
     $baseVersion = $input['base_version'] ?? null;
-    $forceVersion = !empty($input['force_version']);
     if (!$forceVersion && $baseVersion === null) {
         auth_fail('validation_error', 'Validation failed.', 400, [
             'base_version' => 'base_version is required.',
@@ -294,6 +375,11 @@ function elements_update(array $user, array $input): array
         $params['style'] = (string) $style;
     }
 
+    if (array_key_exists('is_publicly_visible', $input)) {
+        $setParts[] = 'is_publicly_visible = :is_publicly_visible';
+        $params['is_publicly_visible'] = parse_bool_input($input['is_publicly_visible'], true) ? 't' : 'f';
+    }
+
     if (array_key_exists('geojson', $input)) {
         $geojsonStr = geojson_validate_for_element((string) $element['element_type'], $input['geojson']);
         if (!geojson_is_valid_postgis($geojsonStr)) {
@@ -332,12 +418,11 @@ function elements_update(array $user, array $input): array
     return $result;
 }
 
-function elements_delete(array $user, array $input): array
+function elements_delete(array $user, array $input, bool $forceVersion = false): array
 {
     $elementId = (string) ($input['id'] ?? '');
     $clientMutationId = trim((string) ($input['client_mutation_id'] ?? ''));
     $baseVersion = $input['base_version'] ?? null;
-    $forceVersion = !empty($input['force_version']);
 
     if ($clientMutationId !== '') {
         $cached = client_mutation_lookup($user['id'], $clientMutationId);

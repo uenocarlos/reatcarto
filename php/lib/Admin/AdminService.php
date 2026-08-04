@@ -447,10 +447,9 @@ function admin_mutate_update_element(array $admin, array $input, string $reason)
     $photos = photos_for_element($elementId);
     $before = format_element_record($element, $photos);
     $payload['id'] = $elementId;
-    $payload['force_version'] = true;
 
     try {
-        $updated = elements_update($owner, $payload);
+        $updated = elements_update($owner, $payload, true);
     } catch (AuthException $e) {
         if ($e->errorCode === 'validation_error') {
             throw $e;

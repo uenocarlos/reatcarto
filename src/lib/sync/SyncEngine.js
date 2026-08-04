@@ -73,66 +73,94 @@ export class SyncEngine {
       return { upToDate: false, offline: true };
     }
 
-    const pending = await this.store.getPendingOutbox();
-    if (pending.length === 0) {
-      return { upToDate: true, results: [] };
-    }
+    const MAX_PASSES = 8;
+    let passCount = 0;
+    const aggregatedResults = [];
+    let anySyncedThisPass = true;
+    let upToDate = false;
+    let waiting = false;
 
     this._flushing = true;
-    this._progress = { completed: 0, total: pending.length };
-    this._emitProgress();
-
-    const results = [];
     try {
-      const ready = await this.getReadyMutations();
-      const mutations = ready.map((row) => ({
-        client_mutation_id: row.client_mutation_id,
-        resource_type: row.resource_type,
-        op: row.op,
-        resource_id: row.resource_id,
-        base_version: row.base_version,
-        depends_on: row.depends_on ?? null,
-        payload: row.payload,
-      }));
-
-      if (mutations.length === 0) {
-        return { upToDate: false, waiting: true, results: [] };
+      const initialPending = await this.store.getPendingOutbox();
+      if (initialPending.length === 0) {
+        this._flushing = false;
+        return { upToDate: true, results: [] };
       }
+      this._progress = { completed: 0, total: initialPending.length };
+      this._emitProgress();
 
-      const batchResult = await this.api.sync.push(mutations, {
-        photoBlobs: this.store,
-        onItemProgress: () => {
-          this._progress.completed += 1;
-          this._emitProgress();
-        },
-      });
+      while (passCount < MAX_PASSES && anySyncedThisPass) {
+        passCount += 1;
+        anySyncedThisPass = false;
+        waiting = false;
 
-      for (const item of batchResult.results ?? []) {
-        results.push(item);
-        if (item.status === 'synced') {
-          await this.store.updateOutbox(item.client_mutation_id, {
-            status: OUTBOX_STATUS.SYNCED,
-            error: null,
-          });
-          if (item.resource) {
-            await this._applyResource(item);
+        const pending = await this.store.getPendingOutbox();
+        if (pending.length === 0) {
+          upToDate = true;
+          break;
+        }
+
+        const ready = await this.getReadyMutations();
+        const mutations = ready.map((row) => ({
+          client_mutation_id: row.client_mutation_id,
+          resource_type: row.resource_type,
+          op: row.op,
+          resource_id: row.resource_id,
+          base_version: row.base_version,
+          depends_on: row.depends_on ?? null,
+          payload: row.payload,
+        }));
+
+        if (mutations.length === 0) {
+          waiting = true;
+          break;
+        }
+
+        const batchResult = await this.api.sync.push(mutations, {
+          photoBlobs: this.store,
+          onItemProgress: () => {
+            this._progress.completed += 1;
+            this._emitProgress();
+          },
+        });
+
+        for (const item of batchResult.results ?? []) {
+          aggregatedResults.push(item);
+          if (item.status === 'synced') {
+            anySyncedThisPass = true;
+            await this.store.updateOutbox(item.client_mutation_id, {
+              status: OUTBOX_STATUS.SYNCED,
+              error: null,
+            });
+            if (item.resource) {
+              await this._applyResource(item);
+            }
+          } else if (item.status === 'conflict') {
+            await this.store.storeConflict({
+              client_mutation_id: item.client_mutation_id,
+              local_snapshot: item.conflict?.local_snapshot ?? item.local_snapshot,
+              remote_snapshot: item.conflict?.remote_snapshot ?? item.remote_snapshot,
+              kind: item.conflict?.kind ?? item.kind ?? 'update_update',
+            });
+          } else if (item.status === 'failed') {
+            await this.store.updateOutbox(item.client_mutation_id, {
+              status: OUTBOX_STATUS.FAILED,
+              error: item.error ?? { message: 'Sync failed' },
+            });
           }
-        } else if (item.status === 'conflict') {
-          await this.store.storeConflict({
-            client_mutation_id: item.client_mutation_id,
-            local_snapshot: item.conflict?.local_snapshot ?? item.local_snapshot,
-            remote_snapshot: item.conflict?.remote_snapshot ?? item.remote_snapshot,
-            kind: item.conflict?.kind ?? item.kind ?? 'update_update',
-          });
-        } else if (item.status === 'failed') {
-          await this.store.updateOutbox(item.client_mutation_id, {
-            status: OUTBOX_STATUS.FAILED,
-            error: item.error ?? { message: 'Sync failed' },
-          });
         }
       }
 
-      return { upToDate: pending.length === results.filter((r) => r.status === 'synced').length, results };
+      if (!waiting) {
+        const remaining = await this.store.getPendingOutbox();
+        upToDate = remaining.length === 0;
+      }
+
+      const result = { upToDate, results: aggregatedResults };
+      if (waiting) result.waiting = true;
+      if (passCount >= MAX_PASSES && !upToDate) result.iterationCapReached = true;
+      return result;
     } finally {
       this._flushing = false;
     }
@@ -156,7 +184,11 @@ export class SyncEngine {
       if (localId && localId !== resource.id) {
         await this.store.removeElement(localId);
         for (const row of rows) {
-          if (row.status !== OUTBOX_STATUS.PENDING) continue;
+          const eligible =
+            row.status === OUTBOX_STATUS.PENDING ||
+            row.status === OUTBOX_STATUS.FAILED ||
+            row.status === OUTBOX_STATUS.CONFLICTED;
+          if (!eligible) continue;
           const usesLocalId =
             row.payload?.element_id === localId ||
             (row.resource_type === 'element' && row.resource_id === localId);

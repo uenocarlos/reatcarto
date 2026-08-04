@@ -2,11 +2,21 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MapPin, Minus, Pentagon, Hand, Navigation, Pencil, MousePointer } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+
+function isMobileDevice() {
+  if (typeof window === 'undefined') return false;
+  if (Capacitor.isNativePlatform()) return true;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(
+    navigator.userAgent || ''
+  );
+}
 
 export default function MapToolbar({ activeTool, onToolChange, onDrawingMode, disabled }) {
   const [pointOpen, setPointOpen] = useState(false);
   const [lineOpen, setLineOpen] = useState(false);
   const [polygonOpen, setPolygonOpen] = useState(false);
+  const [showGps] = useState(() => isMobileDevice());
 
   const handleSelect = (tool, mode, setOpen) => {
     if (disabled) return;
@@ -50,10 +60,12 @@ export default function MapToolbar({ activeTool, onToolChange, onDrawingMode, di
               <MousePointer className="w-4 h-4 text-primary" />
               Inserir manualmente
             </Button>
-            <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('point', 'gps', setPointOpen)}>
-              <Navigation className="w-4 h-4 text-primary" />
-              Usar minha localização
-            </Button>
+            {showGps && (
+              <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('point', 'gps', setPointOpen)}>
+                <Navigation className="w-4 h-4 text-primary" />
+                Usar minha localização
+              </Button>
+            )}
           </div>
         </PopoverContent>
       </Popover>
@@ -82,10 +94,12 @@ export default function MapToolbar({ activeTool, onToolChange, onDrawingMode, di
               <MousePointer className="w-4 h-4 text-primary" />
               Ponto a ponto
             </Button>
-            <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('line', 'gps-track', setLineOpen)}>
-              <Navigation className="w-4 h-4 text-primary" />
-              Rastrear GPS
-            </Button>
+            {showGps && (
+              <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('line', 'gps-track', setLineOpen)}>
+                <Navigation className="w-4 h-4 text-primary" />
+                Rastrear GPS
+              </Button>
+            )}
           </div>
         </PopoverContent>
       </Popover>
@@ -114,10 +128,12 @@ export default function MapToolbar({ activeTool, onToolChange, onDrawingMode, di
               <MousePointer className="w-4 h-4 text-primary" />
               Ponto a ponto
             </Button>
-            <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('polygon', 'gps-track', setPolygonOpen)}>
-              <Navigation className="w-4 h-4 text-primary" />
-              Rastrear GPS
-            </Button>
+            {showGps && (
+              <Button variant="ghost" size="sm" className="w-full justify-start gap-3 text-xs h-9" onClick={() => handleSelect('polygon', 'gps-track', setPolygonOpen)}>
+                <Navigation className="w-4 h-4 text-primary" />
+                Rastrear GPS
+              </Button>
+            )}
           </div>
         </PopoverContent>
       </Popover>

@@ -1,10 +1,12 @@
-import React, { useEffect, useCallback, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Polygon, useMapEvents, useMap, Popup, LayersControl } from 'react-leaflet';
+import React, { useEffect, useCallback, useState, useRef, useMemo } from 'react';
+import { MapContainer, TileLayer, Marker, Polyline, Polygon, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { getIconSvg } from './iconSvgs';
 import { Button } from '@/components/ui/button';
-import { Navigation } from 'lucide-react';
+import { Navigation, Undo2, Redo2 } from 'lucide-react';
 import { Geolocation } from '@capacitor/geolocation';
+import ElementPopup from './ElementPopup';
+import ElementLayersPanel from './ElementLayersPanel';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,11 +18,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const { BaseLayer } = LayersControl;
-
-const ONLINE_BRANCO_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-const ONLINE_OSM_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-const ONLINE_SATELITE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const BASEMAP_URLS = {
+  branco: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+  osm: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  satelite: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+};
 
 const createColoredIcon = (color, iconName, customUrl) => {
   const url = customUrl || (iconName && (iconName.startsWith('/') || iconName.startsWith('http') || iconName.endsWith('.svg')) ? iconName : null);
@@ -67,33 +69,21 @@ const createColoredIcon = (color, iconName, customUrl) => {
 // Senior UI: Global CSS to unify Leaflet controls with the App's Design System
 const ControlStyles = () => (
   <style>{`
-    .leaflet-control-layers {
-      border: 1px solid hsl(var(--border)) !important;
-      border-radius: 12px !important;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
-      margin-right: 12px !important;
-      margin-top: 72px !important;
-      overflow: hidden;
-    }
-    .leaflet-control-layers-toggle {
-      width: 48px !important;
-      height: 48px !important;
-      background-size: 24px 24px !important;
-      background-color: hsl(var(--card)) !important;
-      border-radius: 12px !important;
-    }
-    .leaflet-control-layers-expanded {
-      padding: 12px !important;
-      background: hsl(var(--card)) !important;
-      color: hsl(var(--foreground)) !important;
-      border: none !important;
-    }
-    .leaflet-control-layers-list {
-      font-family: inherit !important;
-      font-size: 14px !important;
-    }
     .leaflet-bar {
       border: none !important;
+    }
+    .element-popup .leaflet-popup-content-wrapper {
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      border: 1px solid hsl(var(--border));
+      padding: 0;
+    }
+    .element-popup .leaflet-popup-content {
+      margin: 10px 12px;
+      line-height: 1.35;
+    }
+    .element-popup .leaflet-popup-tip {
+      box-shadow: none;
     }
   `}</style>
 );
@@ -197,11 +187,135 @@ function DrawingHandler({ activeTool, drawingMode, onAddPoint, onFreehandMove, o
   return null;
 }
 
-function MapElements({ elements, onElementLongPress, tempLine }) {
+const vertexIcon = L.divIcon({
+  html: `<div style="width:14px;height:14px;background:#fff;border:2.5px solid #F97316;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.35);cursor:move"></div>`,
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+  className: '',
+});
+
+/** Closed polygon rings repeat the first vertex at the end — omit duplicate handle. */
+function editableRingIndexes(ring) {
+  if (!ring || ring.length === 0) return [];
+  const last = ring.length - 1;
+  if (last > 0 && ring[0][0] === ring[last][0] && ring[0][1] === ring[last][1]) {
+    return Array.from({ length: last }, (_, i) => i);
+  }
+  return Array.from({ length: ring.length }, (_, i) => i);
+}
+
+function isClosedRing(ring) {
+  if (!ring || ring.length < 2) return false;
+  const last = ring.length - 1;
+  return ring[0][0] === ring[last][0] && ring[0][1] === ring[last][1];
+}
+
+/**
+ * Line/polygon editor: updates path live via Leaflet API (no React re-render mid-drag)
+ * so the shape follows the vertex as the user moves it.
+ */
+function EditableShape({ element, type, style, onGeometryChange, onContextMenu }) {
+  const geojson = JSON.parse(element.geojson);
+  const baseLngLat = type === 'line' ? geojson.coordinates : geojson.coordinates[0];
+  const closed = type === 'polygon' && isClosedRing(baseLngLat);
+  const vertexIndexes = type === 'polygon' ? editableRingIndexes(baseLngLat) : baseLngLat.map((_, i) => i);
+
+  const pathRef = useRef(null);
+  const coordsRef = useRef(baseLngLat.map((c) => [c[0], c[1]]));
+
+  useEffect(() => {
+    const g = JSON.parse(element.geojson);
+    const next = type === 'line' ? g.coordinates : g.coordinates[0];
+    coordsRef.current = next.map((c) => [c[0], c[1]]);
+    const layer = pathRef.current;
+    if (layer) {
+      const latlngs = next.map((c) => [c[1], c[0]]);
+      layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
+    }
+  }, [element.geojson, type]);
+
+  const applyVertex = (index, latlng, commit) => {
+    const next = coordsRef.current.map((c, i) =>
+      i === index ? [latlng.lng, latlng.lat] : [c[0], c[1]]
+    );
+    if (closed && (index === 0 || index === next.length - 1)) {
+      next[0] = [latlng.lng, latlng.lat];
+      next[next.length - 1] = [latlng.lng, latlng.lat];
+    }
+    coordsRef.current = next;
+
+    const layer = pathRef.current;
+    if (layer) {
+      const latlngs = next.map((c) => [c[1], c[0]]);
+      layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
+    }
+
+    if (commit) {
+      if (type === 'line') {
+        onGeometryChange?.({ type: 'LineString', coordinates: next });
+      } else {
+        onGeometryChange?.({ type: 'Polygon', coordinates: [next] });
+      }
+    }
+  };
+
+  const positions = baseLngLat.map((c) => [c[1], c[0]]);
+  const pathOptions =
+    type === 'line'
+      ? {
+          color: style.color || '#F97316',
+          opacity: (style.opacity || 100) / 100,
+          weight: style.weight || 3,
+          dashArray: getDashArray(style.dash_style),
+        }
+      : {
+          color: style.border_color || '#F97316',
+          opacity: (style.border_opacity || 100) / 100,
+          weight: style.border_weight || 2,
+          dashArray: getDashArray(style.border_dash),
+          fillColor: style.fill_color || '#FED7AA',
+          fillOpacity: (style.fill_opacity || 40) / 100,
+        };
+
+  return (
+    <>
+      {type === 'line' ? (
+        <Polyline
+          ref={pathRef}
+          positions={positions}
+          pathOptions={pathOptions}
+          eventHandlers={{ contextmenu: onContextMenu }}
+        />
+      ) : (
+        <Polygon
+          ref={pathRef}
+          positions={positions}
+          pathOptions={pathOptions}
+          eventHandlers={{ contextmenu: onContextMenu }}
+        />
+      )}
+      {vertexIndexes.map((i) => (
+        <Marker
+          key={`${element.id}-v-${i}`}
+          position={[baseLngLat[i][1], baseLngLat[i][0]]}
+          icon={vertexIcon}
+          draggable
+          zIndexOffset={1000}
+          eventHandlers={{
+            drag: (e) => applyVertex(i, e.target.getLatLng(), false),
+            dragend: (e) => applyVertex(i, e.target.getLatLng(), true),
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+function MapElements({ elements, onElementLongPress, tempLine, editingElementId, onGeometryChange }) {
   const handleContextMenu = (e, el) => {
     e.originalEvent.preventDefault();
     const containerPoint = e.containerPoint || { x: e.originalEvent.clientX, y: e.originalEvent.clientY };
-    onElementLongPress(el, { x: containerPoint.x, y: containerPoint.y });
+    onElementLongPress?.(el, { x: containerPoint.x, y: containerPoint.y });
   };
 
   return (
@@ -209,6 +323,8 @@ function MapElements({ elements, onElementLongPress, tempLine }) {
       {elements.map((el) => {
         const geojson = JSON.parse(el.geojson);
         const style = el.style ? JSON.parse(el.style) : {};
+        const isEditing = editingElementId != null && String(el.id) === String(editingElementId);
+        const popup = !isEditing ? <ElementPopup element={el} /> : null;
 
         if (el.element_type === 'point') {
           const coords = geojson.coordinates;
@@ -218,15 +334,35 @@ function MapElements({ elements, onElementLongPress, tempLine }) {
               key={el.id}
               position={[coords[1], coords[0]]}
               icon={icon}
-              eventHandlers={{ contextmenu: (e) => handleContextMenu(e, el) }}
+              draggable={isEditing}
+              eventHandlers={{
+                contextmenu: (e) => handleContextMenu(e, el),
+                dragend: (e) => {
+                  if (!isEditing) return;
+                  const { lat, lng } = e.target.getLatLng();
+                  onGeometryChange?.({ type: 'Point', coordinates: [lng, lat] });
+                },
+              }}
             >
-              {el.name && <Popup><strong>{el.name}</strong>{el.description && <p className="text-xs mt-1">{el.description}</p>}</Popup>}
+              {popup}
             </Marker>
           );
         }
 
         if (el.element_type === 'line') {
-          const coords = geojson.coordinates.map(c => [c[1], c[0]]);
+          if (isEditing) {
+            return (
+              <EditableShape
+                key={el.id}
+                element={el}
+                type="line"
+                style={style}
+                onGeometryChange={onGeometryChange}
+                onContextMenu={(e) => handleContextMenu(e, el)}
+              />
+            );
+          }
+          const coords = geojson.coordinates.map((c) => [c[1], c[0]]);
           return (
             <Polyline
               key={el.id}
@@ -238,12 +374,26 @@ function MapElements({ elements, onElementLongPress, tempLine }) {
                 dashArray: getDashArray(style.dash_style),
               }}
               eventHandlers={{ contextmenu: (e) => handleContextMenu(e, el) }}
-            />
+            >
+              {popup}
+            </Polyline>
           );
         }
 
         if (el.element_type === 'polygon') {
-          const coords = geojson.coordinates[0].map(c => [c[1], c[0]]);
+          if (isEditing) {
+            return (
+              <EditableShape
+                key={el.id}
+                element={el}
+                type="polygon"
+                style={style}
+                onGeometryChange={onGeometryChange}
+                onContextMenu={(e) => handleContextMenu(e, el)}
+              />
+            );
+          }
+          const coords = geojson.coordinates[0].map((c) => [c[1], c[0]]);
           return (
             <Polygon
               key={el.id}
@@ -257,7 +407,9 @@ function MapElements({ elements, onElementLongPress, tempLine }) {
                 fillOpacity: (style.fill_opacity || 40) / 100,
               }}
               eventHandlers={{ contextmenu: (e) => handleContextMenu(e, el) }}
-            />
+            >
+              {popup}
+            </Polygon>
           );
         }
         return null;
@@ -269,6 +421,16 @@ function MapElements({ elements, onElementLongPress, tempLine }) {
       )}
     </>
   );
+}
+
+function PasteHandler({ enabled, onPasteAt }) {
+  useMapEvents({
+    click(e) {
+      if (!enabled) return;
+      onPasteAt([e.latlng.lat, e.latlng.lng]);
+    },
+  });
+  return null;
 }
 
 function PointByPointLine({ points }) {
@@ -286,9 +448,30 @@ function PointByPointMarkers({ points }) {
   ));
 }
 
-function MapControls({ onCenterUser }) {
+/** Impede que cliques/rolagem em overlays React cheguem ao mapa Leaflet (ex.: zoom no double-click). */
+function bindLeafletControlEvents(el) {
+  if (!el) return undefined;
+  L.DomEvent.disableClickPropagation(el);
+  L.DomEvent.disableScrollPropagation(el);
+  return undefined;
+}
+
+function MapControls({
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  historyEnabled = false,
+  elements = [],
+  hiddenIds,
+  onHiddenIdsChange,
+  layersEnabled = false,
+  basemap,
+  onBasemapChange,
+}) {
   const map = useMap();
   const [showLocationPrompt, setShowLocationPrompt] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
 
   const handleLocationClick = () => {
     setShowLocationPrompt(true);
@@ -310,7 +493,38 @@ function MapControls({ onCenterUser }) {
 
   return (
     <>
-      <div className="absolute top-3 right-3 z-[1000] flex flex-col gap-2">
+      {historyEnabled ? (
+        <div
+          ref={bindLeafletControlEvents}
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex gap-2"
+        >
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-11 w-11 shadow-lg bg-card border rounded-[12px] disabled:opacity-40"
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Desfazer"
+          >
+            <Undo2 className="w-5 h-5 text-primary" />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-11 w-11 shadow-lg bg-card border rounded-[12px] disabled:opacity-40"
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Refazer"
+          >
+            <Redo2 className="w-5 h-5 text-primary" />
+          </Button>
+        </div>
+      ) : null}
+
+      <div
+        ref={bindLeafletControlEvents}
+        className="absolute top-3 right-3 z-[1000] flex flex-col gap-2 items-end"
+      >
         <Button
           variant="secondary"
           size="icon"
@@ -320,6 +534,18 @@ function MapControls({ onCenterUser }) {
         >
           <Navigation className="w-6 h-6 text-primary" />
         </Button>
+
+        {layersEnabled ? (
+          <ElementLayersPanel
+            elements={elements}
+            hiddenIds={hiddenIds}
+            onHiddenIdsChange={onHiddenIdsChange}
+            open={layersOpen}
+            onOpenChange={setLayersOpen}
+            basemap={basemap}
+            onBasemapChange={onBasemapChange}
+          />
+        ) : null}
       </div>
 
       <AlertDialog open={showLocationPrompt} onOpenChange={setShowLocationPrompt}>
@@ -353,9 +579,33 @@ export default function LeafletMap({
   gpsPoints,
   onMapInstance,
   readOnly = false,
+  editingElementId = null,
+  onGeometryChange,
+  pasteEnabled = false,
+  onPasteAt,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  hiddenIds: controlledHiddenIds,
+  onHiddenIdsChange,
+  basemap: controlledBasemap,
+  onBasemapChange,
 }) {
   const [tempFreehand, setTempFreehand] = useState([]);
   const [pointByPointCoords, setPointByPointCoords] = useState([]);
+  const [internalBasemap, setInternalBasemap] = useState('branco');
+  const [internalHiddenIds, setInternalHiddenIds] = useState(() => new Set());
+  const hiddenIds = controlledHiddenIds ?? internalHiddenIds;
+  const setHiddenIds = onHiddenIdsChange ?? setInternalHiddenIds;
+  const basemap = controlledBasemap ?? internalBasemap;
+  const setBasemap = onBasemapChange ?? setInternalBasemap;
+  const basemapUrl = BASEMAP_URLS[basemap] || BASEMAP_URLS.branco;
+
+  const visibleElements = useMemo(
+    () => elements.filter((el) => !hiddenIds.has(String(el.id))),
+    [elements, hiddenIds]
+  );
 
   // Component to capture map instance
   const MapInstanceCapture = () => {
@@ -419,24 +669,8 @@ export default function LeafletMap({
         attributionControl={false}
       >
         <MapInstanceCapture />
-        
-        <LayersControl position="topright">
-          <BaseLayer checked name="Mapa Branco">
-            <TileLayer
-              url={ONLINE_BRANCO_URL}
-            />
-          </BaseLayer>
-          <BaseLayer name="OpenStreetMap">
-            <TileLayer
-              url={ONLINE_OSM_URL}
-            />
-          </BaseLayer>
-          <BaseLayer name="Satélite">
-            <TileLayer
-              url={ONLINE_SATELITE_URL}
-            />
-          </BaseLayer>
-        </LayersControl>
+
+        <TileLayer key={basemap} url={basemapUrl} />
 
         {!readOnly && (
           <DrawingHandler
@@ -447,7 +681,16 @@ export default function LeafletMap({
             onFreehandEnd={handleFreehandEnd}
           />
         )}
-        <MapElements elements={elements} onElementLongPress={onElementLongPress} tempLine={readOnly ? null : tempFreehand} />
+        {!readOnly && pasteEnabled && onPasteAt && (
+          <PasteHandler enabled={pasteEnabled} onPasteAt={onPasteAt} />
+        )}
+        <MapElements
+          elements={visibleElements}
+          onElementLongPress={readOnly ? undefined : onElementLongPress}
+          tempLine={readOnly ? null : tempFreehand}
+          editingElementId={readOnly ? null : editingElementId}
+          onGeometryChange={readOnly ? undefined : onGeometryChange}
+        />
         
         {showOtherElements && (
           <div className="opacity-50 pointer-events-none">
@@ -459,7 +702,19 @@ export default function LeafletMap({
         <PointByPointLine points={pointByPointCoords} />
         {gpsLine && <Polyline positions={gpsLine} pathOptions={{ color: '#EF4444', weight: 3, opacity: 0.8 }} />}
         
-        <MapControls />
+        <MapControls
+          historyEnabled={!readOnly && !!(onUndo || onRedo)}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={onUndo}
+          onRedo={onRedo}
+          layersEnabled
+          elements={elements}
+          hiddenIds={hiddenIds}
+          onHiddenIdsChange={setHiddenIds}
+          basemap={basemap}
+          onBasemapChange={setBasemap}
+        />
       </MapContainer>
 
       {/* Point-by-point finish button */}

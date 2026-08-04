@@ -1,141 +1,312 @@
-import React, { useMemo, useRef } from 'react';
-import { Capacitor } from '@capacitor/core';
-import PreviewMap from './PreviewMap';
-import LegendFrame from './LegendFrame';
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  assertExportTitle,
+  buildLegendItems,
+  truncateTitleForPreview,
+  validateLocationSelection,
+} from '@/lib/export';
+import ExportMainMap from './ExportMainMap';
+import ExportLegend from './ExportLegend';
+import ExportLocationInsets from './ExportLocationInsets';
 import InstitutionalFooter from './InstitutionalFooter';
-import LocationInsets from './LocationInsets';
-import { buildPreviewModel } from '@/lib/export/previewModel';
-import { wrapTitleLines } from '@/lib/export/compositionMetadata';
+import './exportComposition.css';
+
+function buildLocationLegendInput({
+  locations,
+  locationCount,
+  stateOnLegend,
+  showMunicipalMesh,
+  stateColor,
+  municipioColor,
+}) {
+  if (locationCount === 0) return null;
+  const first = locations?.[0];
+  if (!first?.uf) return null;
+
+  const result = {
+    stateColor,
+    municipioColor,
+  };
+
+  if (stateOnLegend) result.stateLabel = first.stateName || first.uf;
+  if (showMunicipalMesh) {
+    result.municipioLabel = first.municipioName || 'Malha municipal';
+  }
+
+  if (stateOnLegend || showMunicipalMesh) {
+    result.topicLabel = 'Convencoes cartograficas';
+  }
+
+  if (!result.stateLabel && !result.municipioLabel) return null;
+  return result;
+}
+
+function describeCollisions(collisions, elements) {
+  const roleLabel = { north: 'Norte', scale: 'Escala', legend: 'Legenda' };
+  const namesById = new Map((elements ?? []).map((element) => [
+    String(element.id),
+    String(element.name || element.label || `item ${element.id}`),
+  ]));
+  const coveredByRole = new Map();
+  const messages = [];
+
+  collisions.forEach((collision) => {
+    const [first, second, id] = collision.split(':');
+    if (second === 'element') {
+      if (!coveredByRole.has(first)) coveredByRole.set(first, new Set());
+      coveredByRole.get(first).add(namesById.get(id) || `item ${id}`);
+      return;
+    }
+    messages.push(`${roleLabel[first] || first} colide com ${String(roleLabel[second] || second).toLowerCase()}.`);
+  });
+
+  coveredByRole.forEach((names, role) => {
+    messages.push(`${roleLabel[role] || role} cobre: ${[...names].join(', ')}.`);
+  });
+  return [...new Set(messages)];
+}
+
+export function deriveExportReadiness(session) {
+  const titleResult = assertExportTitle(session.title);
+  const locationResult = validateLocationSelection({
+    locationCount: session.locationCount,
+    locations: session.locations,
+  });
+  const geoBlocksExport = session.locationCount > 0 && Boolean(session.geoLoadError);
+
+  return {
+    canExport: titleResult.ok && locationResult.ok && !geoBlocksExport,
+    titleResult,
+    locationResult,
+    geoBlocksExport,
+  };
+}
 
 export default function CompositionPreview({
-  settings,
-  elements,
-  previewRef,
-  onLegendRectChange,
-  onBasemapReadinessChange,
-  boundaryLoading = false,
-  boundaryResult = null,
-  boundaryError = false,
-  locationLabels = {},
-  basemapReadiness,
+  session,
+  onLegendInsideChange,
+  onLegendRightWidthChange,
+  onLegendItemOrderChange,
+  onChromeChange,
+  onGeoLoadError,
+  onViewChange,
+  geoFeaturesOverride,
+  fetchFn,
+  showMetricControls = false,
+  showExportTrigger = false,
+  onExportClick,
 }) {
-  const mapContainerRef = useRef(null);
-  const isNative = Capacitor.isNativePlatform();
-
-  const model = useMemo(
-    () =>
-      buildPreviewModel({
-        settings,
-        elements,
-        isNativePlatform: isNative,
-        boundaryLoading,
-        boundaryResult,
-        boundaryError,
-        locationLabels,
-        basemapReadiness,
-        baseWidthPx: 640,
-      }),
-    [settings, elements, isNative, boundaryLoading, boundaryResult, boundaryError, locationLabels, basemapReadiness]
+  const [tilesReady, setTilesReady] = useState(false);
+  const [collisions, setCollisions] = useState([]);
+  const collisionMessages = useMemo(
+    () => describeCollisions(collisions, session.elements),
+    [collisions, session.elements],
   );
 
-  const titleLines = model.headerTitle ? wrapTitleLines(model.headerTitle, 60) : [];
-  const layout = model.compositionLayout;
-  const paperAspect = model.paperFrame.aspect;
-  const previewAspect = layout.legendOutsideMap
-    ? layout.totalWidth / layout.totalHeight
-    : paperAspect;
-  const flexDirection =
-    model.legendLayoutMode === 'beside' ? 'row' : model.legendLayoutMode === 'below' ? 'column' : 'row';
+  const locationLegend = buildLocationLegendInput({
+    locations: session.locations,
+    locationCount: session.locationCount,
+    stateOnLegend: session.stateOnLegend,
+    showMunicipalMesh: session.showMunicipalMesh,
+    stateColor: session.stateColor,
+    municipioColor: session.municipioColor,
+  });
+
+  const legendItems = useMemo(
+    () => buildLegendItems({
+      elements: session.elements,
+      hiddenIds: session.hiddenIds,
+      location: locationLegend,
+      order: session.legendItemOrder,
+      groupByTopic: session.legendGroupByTopic,
+    }),
+    [
+      session.elements,
+      session.hiddenIds,
+      locationLegend,
+      session.legendItemOrder,
+      session.legendGroupByTopic,
+    ],
+  );
+
+  const readiness = deriveExportReadiness(session);
+  const orientationClass = session.orientation === 'portrait'
+    ? 'export-composition--portrait'
+    : 'export-composition--landscape';
+  const showLegendRegion = session.legendPosition === 'bottom'
+    || session.legendPosition === 'right'
+    || (session.legendPosition === 'inside' && legendItems.length > 0);
+  const showLocationInsets = session.locationCount > 0;
+  const locationPlacement = session.legendPosition === 'right' ? 'bottom' : 'side';
+  const rightLegendMinWidth = Math.max(160, session.legendColumns * 120);
+
+  const locationInsetsProps = {
+    locationCount: session.locationCount,
+    locations: session.locations,
+    showMunicipalMesh: session.showMunicipalMesh,
+    stateColor: session.stateColor,
+    municipioColor: session.municipioColor,
+    onGeoLoadError,
+    geoFeaturesOverride,
+    fetchFn,
+  };
+
+  const handleTilesReady = useCallback((ready) => {
+    setTilesReady(Boolean(ready));
+  }, []);
+
+  const handleCollisionChange = useCallback((nextCollisions) => {
+    setCollisions(nextCollisions);
+  }, []);
 
   return (
     <div
-      ref={previewRef}
-      className="flex flex-col border-2 border-amber-500 bg-white overflow-hidden min-h-0"
-      data-testid="composition-preview"
-      data-preview-status={model.previewStatus}
-      data-settings-hash={model.settingsHash}
-      data-composition-aspect={String(previewAspect)}
-      data-legend-outside-map={layout.legendOutsideMap ? 'true' : 'false'}
-      style={{
-        aspectRatio: String(previewAspect),
-        maxHeight: '100%',
-      }}
+      className={`export-composition ${orientationClass} export-composition--paper-${session.paper}`}
+      data-testid="export-composition-root"
+      data-orientation={session.orientation}
+      data-can-export={readiness.canExport ? 'true' : 'false'}
+      data-tiles-ready={tilesReady ? 'true' : 'false'}
     >
-      {titleLines.length > 0 && (
-        <div className="text-center py-1 border-b text-xs font-bold flex-shrink-0 bg-white" data-testid="export-header-title">
-          {titleLines.map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      )}
-
-      <div
-        className="flex-1 flex min-h-0 overflow-hidden relative"
-        style={{ flexDirection }}
-        data-testid="composition-layout"
-        data-layout-mode={model.legendLayoutMode}
-      >
-        <div
-          ref={mapContainerRef}
-          className="flex-1 relative min-w-0 min-h-0 border-[3px] border-amber-500 m-1 sm:m-2"
-          data-testid="composition-map-frame"
-          data-map-aspect={String(paperAspect)}
-          style={
-            layout.legendOutsideMap
-              ? {
-                  flex: '0 1 auto',
-                  aspectRatio: String(paperAspect),
-                  width: model.legendLayoutMode === 'below' ? '100%' : undefined,
-                }
-              : {
-                  flex: model.legendLayoutMode === 'beside' ? '1 1 auto' : undefined,
-                  width: model.legendLayoutMode === 'below' ? '100%' : undefined,
-                }
-          }
-        >
-          <PreviewMap
-            elements={model.visibleElements}
-            basemap={model.basemap}
-            tileUrl={model.tileUrl}
-            tagDescriptors={model.tagDescriptors}
-            locationOverlay={model.locationOverlay}
-            onBasemapReadinessChange={onBasemapReadinessChange}
-          />
-          <LocationInsets
-            descriptors={model.locatorInsets}
-            municipalityColor={model.settings.municipalityColor}
-            stateColor={model.settings.stateColor}
-          />
-          {model.legendLayoutMode === 'inside' && (
-            <LegendFrame
-              layoutMode="inside"
-              legendRect={model.legendRect}
-              legendItems={model.legendItems}
-              columns={model.legendGrid.columns}
-              fontSizePx={model.legendGrid.fontSizePx}
-              spacing={model.legendGrid.spacing}
-              onLegendRectChange={onLegendRectChange}
-              containerRef={mapContainerRef}
-            />
-          )}
-        </div>
-
-        {(model.legendLayoutMode === 'beside' || model.legendLayoutMode === 'below') && (
-          <LegendFrame
-            layoutMode={model.legendLayoutMode}
-            legendItems={model.legendItems}
-            columns={model.legendGrid.columns}
-            fontSizePx={model.legendGrid.fontSizePx}
-            spacing={model.legendGrid.spacing}
-          />
-        )}
+      <div className="export-composition__title" data-testid="export-composition-title">
+        {truncateTitleForPreview(session.title)}
       </div>
 
-      <InstitutionalFooter settings={model.settings} boundaryMeta={model.institutionalFooter} />
+      <div
+        className={`export-composition__body export-composition__body--legend-${session.legendPosition}`}
+        style={session.legendPosition === 'right'
+          ? { '--export-legend-side-min-width': `${rightLegendMinWidth}px` }
+          : undefined}
+      >
+        <div
+          className={[
+            'export-composition__map-column',
+            showLocationInsets ? `export-composition__map-column--with-insets-${locationPlacement}` : '',
+          ].filter(Boolean).join(' ')}
+        >
+          <div
+            className={[
+              'export-composition__main-map-region',
+              showLocationInsets && locationPlacement === 'side' ? 'export-composition__main-map-region--with-insets-side' : '',
+              session.legendPosition === 'right' ? 'export-composition__main-map-region--legend-right' : '',
+            ].filter(Boolean).join(' ')}
+          >
+            <div className="export-composition__main-map-cell">
+              <ExportMainMap
+                center={session.center}
+                zoom={session.zoom}
+                elements={session.elements}
+                hiddenIds={session.hiddenIds}
+                basemap={session.basemap}
+                showLabels={session.showLabels}
+                locationCount={session.locationCount}
+                locations={session.locations}
+                showMunicipalMesh={session.showMunicipalMesh}
+                stateOnLegend={session.stateOnLegend}
+                stateColor={session.stateColor}
+                municipioColor={session.municipioColor}
+                northPosition={session.northPosition}
+                northSizePx={session.northSizePx}
+                scalePosition={session.scalePosition}
+                scaleSizePx={session.scaleSizePx}
+                interactive
+                onChromeChange={onChromeChange}
+                onCollisionChange={handleCollisionChange}
+                onViewChange={onViewChange}
+                onTilesReadyChange={handleTilesReady}
+                onGeoLoadError={onGeoLoadError}
+                fetchFn={fetchFn}
+              />
 
-      <span className="sr-only" data-testid="export-chrome-flags">
-        {JSON.stringify(model.chrome)}
-      </span>
+              {session.legendPosition === 'inside' && showLegendRegion ? (
+                <ExportLegend
+                  items={legendItems}
+                  legendPosition="inside"
+                  legendColumns={session.legendColumns}
+                  legendFontPx={session.legendFontPx}
+                  legendSpacing={session.legendSpacing}
+                  legendInside={session.legendInside}
+                  onLegendInsideChange={onLegendInsideChange}
+                  onLegendItemOrderChange={onLegendItemOrderChange}
+                  showMetricControls={showMetricControls}
+                />
+              ) : null}
+
+              {collisionMessages.length > 0 ? (
+                <div
+                  className="export-collision-warning"
+                  data-testid="export-collision-warning"
+                  data-export-exclude="true"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {collisionMessages.map((message) => <span key={message}>{message}</span>)}
+                </div>
+              ) : null}
+            </div>
+
+            {showLocationInsets && locationPlacement === 'side' ? (
+              <ExportLocationInsets {...locationInsetsProps} placement="side" />
+            ) : null}
+
+          </div>
+
+          {showLocationInsets && locationPlacement === 'bottom' ? (
+            <ExportLocationInsets {...locationInsetsProps} placement="bottom" />
+          ) : null}
+        </div>
+
+        {session.legendPosition === 'right' && showLegendRegion ? (
+          <ExportLegend
+            items={legendItems}
+            legendPosition="right"
+            legendColumns={session.legendColumns}
+            legendFontPx={session.legendFontPx}
+            legendSpacing={session.legendSpacing}
+            legendRightWidthPct={session.legendRightWidthPct}
+            onLegendRightWidthChange={onLegendRightWidthChange}
+            onLegendItemOrderChange={onLegendItemOrderChange}
+            showMetricControls={showMetricControls}
+          />
+        ) : null}
+
+        {session.legendPosition === 'bottom' && showLegendRegion ? (
+          <ExportLegend
+            items={legendItems}
+            legendPosition="bottom"
+            legendColumns={session.legendColumns}
+            legendFontPx={session.legendFontPx}
+            legendSpacing={session.legendSpacing}
+          />
+        ) : null}
+      </div>
+
+      {!readiness.locationResult.ok && session.locationCount > 0 ? (
+        <div className="export-composition__selection-warning" data-testid="export-selection-incomplete">
+          Selecao de localizacao incompleta. Escolha a UF antes de exportar.
+        </div>
+      ) : null}
+
+      {session.geoLoadError && session.locationCount > 0 ? (
+        <div className="export-composition__geo-error" data-testid="export-geo-error" role="alert">
+          {session.geoLoadError}
+        </div>
+      ) : null}
+
+      <InstitutionalFooter
+        authorship={session.authorship}
+        technicalResponsible={session.technicalResponsible}
+      />
+
+      {showExportTrigger ? (
+        <button
+          type="button"
+          data-testid="export-generate-trigger"
+          disabled={!readiness.canExport}
+          onClick={onExportClick}
+        >
+          Exportar
+        </button>
+      ) : null}
     </div>
   );
 }

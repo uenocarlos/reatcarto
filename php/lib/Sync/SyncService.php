@@ -398,6 +398,41 @@ function sync_resolve(array $user, array $input): array
                 'resource' => $resource,
             ];
         }
+        if ($resourceType === 'photo' && $resourceId) {
+            $photo = fetch_photo_by_id((string) $resourceId);
+            if ($photo === null) {
+                sync_resolve_mark_synced($clientMutationId, $user, 'photo', (string) $resourceId, [
+                    'deleted' => true,
+                ]);
+
+                return [
+                    'success' => true,
+                    'resource_type' => 'photo',
+                    'resource' => null,
+                ];
+            }
+            if ((string) $photo['owner_id'] !== (string) $user['id']) {
+                auth_fail('forbidden', 'You do not have access to this photo.', 403);
+            }
+            $resource = [
+                'id' => (string) $photo['id'],
+                'element_id' => (string) $photo['element_id'],
+                'content_type' => (string) $photo['content_type'],
+                'byte_size' => (int) $photo['byte_size'],
+                'version' => (int) $photo['version'],
+                'created_at' => (string) $photo['created_at'],
+                'url' => '/php/photos/get.php?id=' . urlencode((string) $photo['id']),
+            ];
+            sync_resolve_mark_synced($clientMutationId, $user, 'photo', (string) $resourceId, [
+                'photo' => $resource,
+            ]);
+
+            return [
+                'success' => true,
+                'resource_type' => 'photo',
+                'resource' => $resource,
+            ];
+        }
         auth_fail('validation_error', 'Cannot resolve remote choice.', 400);
     }
 
@@ -411,7 +446,7 @@ function sync_resolve(array $user, array $input): array
 
     if ($resourceType === 'element') {
         if ($op === 'delete') {
-            elements_delete($user, $applyInput);
+            elements_delete($user, $applyInput, true);
             sync_resolve_mark_synced($clientMutationId, $user, 'element', (string) $resourceId, [
                 'deleted' => true,
             ]);
@@ -430,8 +465,7 @@ function sync_resolve(array $user, array $input): array
 
             return ['success' => true, 'resource_type' => 'element', 'resource' => $result['element']];
         }
-        $applyInput['force_version'] = true;
-        $result = elements_update($user, $applyInput);
+        $result = elements_update($user, $applyInput, true);
         sync_resolve_mark_synced(
             $clientMutationId,
             $user,
@@ -453,7 +487,7 @@ function sync_resolve(array $user, array $input): array
             return ['success' => true, 'resource_type' => 'map', 'resource' => null];
         }
         if ($op === 'publish') {
-            $result = maps_publish($user, $applyInput);
+            $result = maps_publish($user, $applyInput, true);
             sync_resolve_mark_synced(
                 $clientMutationId,
                 $user,
@@ -465,7 +499,7 @@ function sync_resolve(array $user, array $input): array
             return ['success' => true, 'resource_type' => 'map', 'resource' => $result['map']];
         }
         if ($op === 'unpublish') {
-            $result = maps_unpublish($user, $applyInput);
+            $result = maps_unpublish($user, $applyInput, true);
             sync_resolve_mark_synced(
                 $clientMutationId,
                 $user,
@@ -486,6 +520,18 @@ function sync_resolve(array $user, array $input): array
         );
 
         return ['success' => true, 'resource_type' => 'map', 'resource' => $result['map']];
+    }
+
+    if ($resourceType === 'photo') {
+        if ($op === 'delete') {
+            photos_delete($user, $applyInput, true);
+            sync_resolve_mark_synced($clientMutationId, $user, 'photo', (string) $resourceId, [
+                'deleted' => true,
+            ]);
+
+            return ['success' => true, 'resource_type' => 'photo', 'resource' => null];
+        }
+        auth_fail('validation_error', 'Unsupported photo operation for resolve.', 400);
     }
 
     auth_fail('validation_error', 'Unsupported resolve target.', 400);

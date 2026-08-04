@@ -1,453 +1,260 @@
-# User Stories: Map Export Composition (Exportar Mapa)
+# User Stories: Export Map
 
-Canonical behavior catalog for the map export preview and options screen,
-PNG delivery, legend/layout controls, basemap and Brazil location insets.
-Companion to `_prd.md`; consumed by `_techspec.md` and `_tests.md`.
+Canonical behavior catalog for map export composition and download. Companion to `_prd.md`; consumed by `_techspec.md` (component mapping) and `_tests.md` (coverage matrix).
 
 ## Personas
 
-- **Map owner** — an authenticated field or extension user who edits an owned map and needs a branded PNG for field sharing or documents.
-- **Anonymous visitor** — a person viewing a published map without ownership; must not gain export rights through this feature.
+- **Map owner** — Authenticated user who owns the map, edits layers and styles in the map editor, and needs a print-ready PNG or PDF for reports, teaching materials, and institutional delivery.
+- **Anonymous public visitor** — Views published maps without authentication; must not obtain export capabilities in this version.
+- **Non-owner authenticated user** — Logged-in user who opens another owner’s map only if the product already allows (e.g. public route); must not gain private-map export rights.
 
 ## Story Index
 
-| ID | Feature Area | Persona | Story |
-| --- | --- | --- | --- |
-| US-001 | Entry and access | Map owner | Open the export composition screen from the editor |
-| US-002 | Entry and access | Anonymous visitor | Cannot export from the public gallery |
-| US-003 | Metadata | Map owner | Set title, author, and optional technical responsible |
-| US-004 | Legend layout | Map owner | Choose legend position inside, beside, or below the map |
-| US-005 | Legend layout | Map owner | Drag and resize an inside legend |
-| US-006 | Legend appearance | Map owner | Set legend columns, font size, and item spacing |
-| US-007 | Layer control | Map owner | Toggle categories and individual elements for export |
-| US-008 | Tags | Map owner | Toggle element name tags globally |
-| US-009 | Basemap | Map owner | Choose the export basemap including offline tiles |
-| US-010 | Location maps | Map owner | Configure none, one, or two Brazil locator insets |
-| US-011 | Location maps | Map owner | Style location layers on the main map and legend |
-| US-012 | Page setup | Map owner | Choose paper size, orientation, and DPI |
-| US-013 | Preview | Map owner | See a live preview of the full composition |
-| US-014 | Footer | Map owner | See institutional footer and logo on the composition |
-| US-015 | Export | Map owner | Export the composition as PNG |
-| US-016 | Persistence | Map owner | Reopen export with the last settings for that map |
-| US-017 | Validation | Map owner | Meet export gates before generating the PNG |
+| ID     | Feature Area              | Persona                 | Story                                              |
+|--------|---------------------------|-------------------------|----------------------------------------------------|
+| US-001 | Entry & access            | Map owner               | Open export from the map editor                    |
+| US-002 | Entry & access            | Anonymous / non-owner   | Export remains unavailable outside owner editor    |
+| US-003 | Session & layout chrome   | Map owner               | Compose export layout with live preview            |
+| US-004 | Text & branding           | Map owner               | Set title, authorship; fixed institutional footer  |
+| US-005 | Format & page quality     | Map owner               | Choose format, paper, orientation, and DPI         |
+| US-006 | Legend                    | Map owner               | Position and format the legend                     |
+| US-007 | Layers & basemap          | Map owner               | Control layers, labels, and basemap for export     |
+| US-008 | Location insets           | Map owner               | Configure location inset maps and regional styles  |
+| US-009 | Map chrome                | Map owner               | Export with scale, north, graticule, frame, labels |
+| US-010 | Download                  | Map owner               | Export file and recover from failures              |
+| US-011 | Responsiveness            | Map owner               | Use full export composition on mobile              |
+| US-012 | Session lifecycle         | Map owner               | Close/cancel discards ephemeral export config      |
 
-## Entry and access
+## Entry & access
 
-### US-001: Open the export composition screen from the editor
+### US-001: Open export from the map editor
 
-**As a** map owner, **I want** a clear way to open map export from the editor, **so that** I can compose and download a PNG without leaving my map.
+**As a** map owner, **I want** a clear control in the map editor that opens the export composition experience, **so that** I can produce a shareable layout from the map I already prepared.
 
 Acceptance criteria:
 
-- AC-1: Given I am authenticated and editing a map I own, when I activate the export action, then the export composition screen opens with options and preview.
-- AC-2: Given the export screen is open, when I cancel or dismiss it, then I return to the editor without generating a file.
+- AC-1: Given I am the authenticated owner editing my map, when I activate the export control, then the export composition UI opens on top of or within the editor flow.
+- AC-2: Given I open export, when the composition UI first appears, then the starting viewport matches the editor’s current view, starting layer visibility matches the editor, and basemap matches the editor where an equivalent export basemap exists.
+- AC-3: Given the export UI is open, when I view available actions, then I can cancel/close, refresh preview if offered as an explicit action, and start export/download.
 
 Edge cases:
 
-- EC-1 (Invalid input): Hostile or unexpected activation parameters → export screen does not open in a broken state; editor remains usable.
-- EC-2 (Empty / missing): The map has no elements yet → the screen still opens so I can configure options; export remains subject to US-017 gates.
-- EC-3 (Limits): Very large element counts → the screen opens and remains usable, possibly with slower preview updates, without crashing.
-- EC-4 (Permissions): My session expires while opening export → I am denied and guided to authenticate; no PNG is produced.
-- EC-5 (Concurrency): I trigger open twice quickly → a single export screen instance is shown.
-- EC-6 (Interruption): Connectivity drops while opening → the screen still opens for local composition when map data is already loaded; failures are visible if required assets cannot load.
-- EC-7 (Repetition): I reopen after cancel → the screen opens again with persisted settings per US-016.
-- EC-8 (Ordering): I open export before the map finishes loading → opening waits or shows a clear loading state rather than an empty broken preview.
-- EC-9 (State transitions): The map is deleted or ownership lost while the screen is open → export actions are blocked with a clear message.
-- EC-10 (Scale): Many maps in the workspace → only the current map’s export screen and settings are used.
+- EC-1: Map has zero drawable elements → export still opens; preview shows basemap/empty map frame; legend is empty or shows only location legend items if chosen.
+- EC-2: Map record has blank name → title field starts empty (or blank string); user can type a title before export.
+- EC-3: Owner session expires while editor is open before export → export open is blocked or fails with an authentication message consistent with the product; private map content is not exportable without a valid owner session.
+- EC-4: Double-activation of open export while already open → second open does not spawn a conflicting second composition that loses unsaved session options without warning; UI remains single session.
+- EC-5: Very large element count (100× typical) → open remains responsive; legend/layer lists scroll; export may take longer but UI stays usable with progress later at download time.
 
-### US-002: Cannot export from the public gallery
+### US-002: Export unavailable outside owner editor
 
-**As an** anonymous visitor, **I want** the public view to remain read-only regarding export, **so that** owners retain control of branded deliverables.
+**As a** public visitor or non-owner, **I want** the product not to offer map export, **so that** private cartography and print products stay owner-controlled.
 
 Acceptance criteria:
 
-- AC-1: Given a published map in the public gallery or public route, when I view it without owning it, then no export composition control is available that produces this PNG feature.
-- AC-2: Given I attempt to reach export through a direct or crafted path without ownership, when the product evaluates access, then export is denied without exposing private editor controls.
+- AC-1: Given I visit a published map as anonymous, when I use the public map UI, then no export/download map composition control is present (or is clearly unavailable).
+- AC-2: Given I browse the public gallery, when I open map cards, then no path starts full export composition for that map.
+- AC-3: Given a non-owner authenticated user reaches a map they do not own via public means, when they view it read-only, then export composition is not offered.
 
 Edge cases:
 
-- EC-1 (Invalid input): Crafted export URLs or payloads → rejected safely.
-- EC-2 (Empty / missing): Unpublished or missing public map → neutral unavailable state; no export.
-- EC-3 (Limits): Repeated unauthorized export attempts → remain denied without leaking ownership details.
-- EC-4 (Permissions): Another authenticated user who does not own the map → cannot export that map through this feature.
-- EC-5 (Concurrency): Owner unpublishes while I view → public content becomes unavailable; export remains unavailable.
-- EC-6 (Interruption): Network loss on public view → no export capability appears as a fallback.
-- EC-7 (Repetition): Retrying denied export → remains denied.
-- EC-8 (Ordering): Login from public view without becoming owner → still no export for maps I do not own.
-- EC-9 (State transitions): Moderated or deleted public map → no export.
-- EC-10 (Scale): High anonymous traffic → export remains absent and unauthorized attempts stay denied.
+- EC-1: Crafted client request attempting export for another user’s map → server and product deny; owner-only rule holds.
+- EC-2: Map unpublished while a non-owner had a public link → view unavailable as per existing public rules; export not exposed.
+- EC-3: Owner tries export after account deactivation mid-session → denied with authentication/account message.
+- EC-4: Deep link to a hypothetical export route without owner session → no successful private export.
 
-## Metadata
+## Session & layout chrome
 
-### US-003: Set title, author, and optional technical responsible
+### US-003: Compose export layout with live preview
 
-**As a** map owner, **I want** to enter title, author, and optional technical responsible, **so that** the PNG carries proper attribution.
+**As a** map owner, **I want** a WYSIWYG preview that reflects my export settings, **so that** I know what the file will look like before downloading.
 
 Acceptance criteria:
 
-- AC-1: Given the export screen, when I enter a title, then the preview shows the title in the composition header area.
-- AC-2: Given I enter an author, when the preview updates, then authorship appears with the footer information block.
-- AC-3: Given I enter a technical responsible, when the preview updates, then that line appears with the footer block; when I leave it blank, no responsible line is required.
-- AC-4: Given title or author is blank, when I attempt to export, then export is blocked per US-017.
+- AC-1: Given export is open, when I change layout-affecting options (legend position, paper orientation when preview honors it, location inset count, title text), then the preview updates to show the composition (live and/or when I request preview refresh).
+- AC-2: Given the preview, when I inspect it, then I see title area, main map, legend (when content exists), optional location insets, and institutional footer with logo.
+- AC-3: Given “inside map” legend position, when I use drag/resize affordances where printJs provided them, then legend placement/size in the preview updates accordingly.
 
 Edge cases:
 
-- EC-1 (Invalid input): Extremely long or hostile text → input is constrained or sanitized for safe display; export does not render executable content.
-- EC-2 (Empty / missing): Blank title or author → preview may omit those lines but export remains blocked.
-- EC-3 (Limits): Maximum practical title length for the chosen paper size → text remains readable or wraps without breaking the layout frame.
-- EC-4 (Permissions): Non-owner → cannot edit these fields (screen unavailable).
-- EC-5 (Concurrency): Two devices edit settings → last persisted state for the map wins per TechSpec sync rules without corrupting the map geometries.
-- EC-6 (Interruption): App closes mid-typing → on restore, last successfully persisted values return (US-016).
-- EC-7 (Repetition): Clearing and re-entering fields → preview reflects the latest values.
-- EC-8 (Ordering): Export clicked before leaving a field → current field values are what validation uses.
-- EC-9 (State transitions): Switching maps → metadata for the other map does not leak into this composition.
-- EC-10 (Scale): Very long author/responsible strings → footer remains usable without covering the logo beyond acceptable layout rules.
+- EC-1: Preview update while map tiles still loading → user sees loading state or incomplete basemap; export waits or warns rather than silent garbage.
+- EC-2: Rapid successive option changes → UI converges to last selected options without permanent freeze.
+- EC-3: Extremely long title → preview wraps or truncates in a readable way without overlapping footer indefinitely.
+- EC-4: Legend with hundreds of items → preview scrolls and remains interactable; product may recommend PNG as in printJs guidance.
 
-## Legend layout
+## Text & branding
 
-### US-004: Choose legend position inside, beside, or below the map
+### US-004: Title, authorship, fixed institutional footer
 
-**As a** map owner, **I want** to place the legend inside, beside, or below the map, **so that** I can balance geography visibility and legend readability.
+**As a** map owner, **I want** to set map title and credit lines while institutional REAT/FURG branding always appears, **so that** maps are both correctly attributed and institutionally recognizable.
 
 Acceptance criteria:
 
-- AC-1: Given legend items exist, when I choose **inside**, then the legend appears within the map frame in the preview and PNG.
-- AC-2: Given I choose **beside**, then the legend sits outside the map frame to the side and the total composition grows to include it.
-- AC-3: Given I choose **below**, then the legend sits outside the map frame under the map and the total composition grows to include it.
-- AC-4: Given I switch among the three positions, when the preview updates live, then the PNG matches the selected arrangement.
+- AC-1: Given export opens, when I inspect text fields, then title defaults to the map name, authorship is empty, and technical-responsible is empty; each is editable.
+- AC-2: Given I type authorship and technical-responsible text, when the preview updates, then those lines appear in the credit areas of the composition.
+- AC-3: Given any successful export, when I open the file, then fixed institutional footer content and REAT logo appear in the composition as product branding (not removed by clearing authorship fields).
 
 Edge cases:
 
-- EC-1 (Invalid input): Unknown position value in restored settings → falls back to a safe default position and remains usable.
-- EC-2 (Empty / missing): No legend items → legend region is absent or empty and US-017 applies.
-- EC-3 (Limits): Many legend items beside/below → composition grows; content remains in the exported image.
-- EC-4 (Permissions): Non-owner → cannot change position.
-- EC-5 (Concurrency): Rapid position switching → preview settles on the latest choice.
-- EC-6 (Interruption): Failure mid-render after a switch → user sees an error or retryable state without a silent wrong position in a successful export.
-- EC-7 (Repetition): Re-selecting the same position → no layout corruption.
-- EC-8 (Ordering): Change position before legend items load → layout applies once items are available.
-- EC-9 (State transitions): Moving from inside (with custom size/place) to beside/below → external layout uses the outside placement rules; returning to inside restores a usable inside frame.
-- EC-10 (Scale): Dense legends → columns/font/spacing (US-006) remain available to manage crowding.
+- EC-1: Empty title on export → allowed or blocked with clear validation; if allowed, composition has empty title region; product must define one consistent rule (default: allow empty title).
+- EC-2: Extremely long authorship/technical lines → wrap within footer text region.
+- EC-3: Special characters and quotes in title/authorship → export file and preview show them correctly.
+- EC-4: User clears all credit fields → institutional footer and logo remain.
 
-### US-005: Drag and resize an inside legend
+## Format & page quality
 
-**As a** map owner, **I want** to drag and resize the legend when it is inside the map, **so that** I can keep it from covering important features.
+### US-005: Format, paper, orientation, DPI
+
+**As a** map owner, **I want** to choose PNG or PDF, paper size, orientation, and DPI, **so that** the download matches my print or digital delivery need.
 
 Acceptance criteria:
 
-- AC-1: Given legend position is **inside**, when I drag the legend, then it moves freely within the map area and stays inside that area.
-- AC-2: Given legend position is **inside**, when I resize the legend, then its frame updates within allowed bounds inside the map area and the preview reflects it live.
-- AC-3: Given legend position is **beside** or **below**, when I view the legend, then drag/resize affordances for free placement inside the map are not the interaction model (external legends follow outside layout).
+- AC-1: Given export settings, when I choose PNG or PDF, then the eventual download is of that type.
+- AC-2: Given paper selection, when I choose A4, A3, or Letter with landscape or portrait, then export uses that page geometry for PDF (and equivalent frame sizing intent for PNG).
+- AC-3: Given DPI input, when value is within 72–600, then export uses that quality; default is 300.
+- AC-4: Given PDF choice with dense legend, when UI is shown, then the product surfaces the existing product guidance that PNG is preferred for maps with heavy legend content.
 
 Edge cases:
 
-- EC-1 (Invalid input): Drag gestures that would place the legend outside the map → legend clamps to the map area.
-- EC-2 (Empty / missing): Empty legend while inside → no interactive empty blocker covering the map, or a minimal frame that still respects US-017.
-- EC-3 (Limits): Resize below a minimum readable size or above the map area → clamped to documented min/max.
-- EC-4 (Permissions): Read-only contexts → no drag/resize (export screen unavailable to non-owners).
-- EC-5 (Concurrency): Simultaneous touch and mouse updates → final geometry is coherent.
-- EC-6 (Interruption): Touch cancelled mid-drag → legend remains at last valid position.
-- EC-7 (Repetition): Double-tap or repeated resize → stable geometry without jumps outside the map.
-- EC-8 (Ordering): Drag while switching away from inside → interaction ends cleanly; external layout takes over.
-- EC-9 (State transitions): Restored inside position from persistence → appears at last saved place and size when still valid.
-- EC-10 (Scale): Small phone screens → legend remains manipulable without trapping the user; cancel remains available.
+- EC-1: DPI below 72 or above 600 → rejected or clamped with user-visible correction.
+- EC-2: Non-numeric DPI entry → invalid input not applied; prior valid value retained.
+- EC-3: A3 at 600 DPI on low-memory device → may fail; user sees failure message and can lower DPI and retry.
+- EC-4: Switch format PNG↔PDF after configuring → settings retained across format switch within the session.
 
-## Legend appearance
+## Legend
 
-### US-006: Set legend columns, font size, and item spacing
+### US-006: Position and format the legend
 
-**As a** map owner, **I want** to control legend columns, font size, and spacing, **so that** the legend fits my report or phone-readable layout.
+**As a** map owner, **I want** to place and format the legend, **so that** symbols remain readable for the paper size I chose.
 
 Acceptance criteria:
 
-- AC-1: Given the legend, when I set columns from 1 to 6, then items flow into that column count in preview and PNG.
-- AC-2: Given I set font size from 8px to 18px, then legend text uses that size in preview and PNG.
-- AC-3: Given I choose spacing compact, normal, or wide, then vertical/horizontal gaps between items match the chosen density.
+- AC-1: Given export, when I select legend position inside, right, or bottom, then preview layout matches the position.
+- AC-2: Given formatting controls, when I set columns 1–6, font size 8–18 px, and spacing from very compact through very loose, then legend presentation updates accordingly.
+- AC-3: Given right-side legend, when resize-by-edge is available, then I can change legend width relative to the map (printJs parity).
+- AC-4: Given layer symbols and names, when legend builds, then items reflect currently included export layers/groups with correct visual symbols.
 
 Edge cases:
 
-- EC-1 (Invalid input): Out-of-range column or font values in restored data → clamped into 1–6 and 8–18.
-- EC-2 (Empty / missing): No items → appearance controls remain visible but have no items to layout.
-- EC-3 (Limits): 6 columns with long labels → labels remain readable via wrapping or truncation rules that do not clip the swatch meaninglessly.
-- EC-4 (Permissions): Non-owner → cannot change appearance.
-- EC-5 (Concurrency): Rapid slider changes → preview tracks the latest value.
-- EC-6 (Interruption): Render failure at extreme settings → user sees failure feedback; last good export is not claimed successful.
-- EC-7 (Repetition): Toggling spacing options → layout remains consistent with the selected option.
-- EC-8 (Ordering): Change font before position → both apply together in the live preview.
-- EC-9 (State transitions): Persisted appearance restored → matches last saved values.
-- EC-10 (Scale): Dozens of legend items → columns and spacing still apply; composition may grow when legend is outside.
+- EC-1: All thematic layers hidden and no location legend items → legend empty or hidden without error crash.
+- EC-2: Six columns on narrow legend/panel → layout still readable, may reflow.
+- EC-3: Font size 8 with very compact spacing and many items → dense but selectable; no uncontrolled overflow that blocks export actions.
+- EC-4: Reorder/drag of legend items if offered by parity → order sticks until session end; cancel discards.
 
-## Layer control
+## Layers & basemap
 
-### US-007: Toggle categories and individual elements for export
+### US-007: Control layers, labels, and basemap
 
-**As a** map owner, **I want** to turn categories and individual elements on or off for the export, **so that** I can hide noise without deleting field data.
+**As a** map owner, **I want** to toggle layers and basemap for the export without losing the editor’s preparatory work, **so that** the printed map shows only what I need.
 
 Acceptance criteria:
 
-- AC-1: Given elements grouped by category, when I turn a category off, then its elements disappear from the preview map and from the legend.
-- AC-2: Given a category is on, when I turn an individual element off, then only that element disappears from map and legend.
-- AC-3: Given I turn elements back on, when the preview updates, then they reappear with their styling.
-- AC-4: Given these toggles, when I later edit the map in the editor, then the underlying stored elements are not deleted merely by being hidden for export.
+- AC-1: Given export opens from editor state, when I view layer controls, then visibility matches editor starting state and I can toggle layers for export.
+- AC-2: Given I change basemap among OpenStreetMap, Carto light, and satellite, when preview updates, then the main map uses that basemap.
+- AC-3: Given “show names on map” is off by default or per inheritance, when I enable it, then element names suitable for labeling appear on the export map preview/export.
+- AC-4: Given I cancel export after changing export-only layer toggles, when I return to the editor, then my editor’s pre-export visibility/basemap are not permanently forced to export temporary choices (editor left consistent with pre-open or last intentional editor state).
 
 Edge cases:
 
-- EC-1 (Invalid input): Toggle references a deleted element id in persisted settings → ignore stale id safely.
-- EC-2 (Empty / missing): Map with zero elements → layer list is empty; US-017 may block export unless location legend items qualify.
-- EC-3 (Limits): Hundreds of elements → list remains scrollable and toggles remain responsive enough to use.
-- EC-4 (Permissions): Non-owner → cannot toggle.
-- EC-5 (Concurrency): Toggle while preview re-renders → final visibility matches last user choice.
-- EC-6 (Interruption): Failure loading an element style → that element shows a safe fallback or error marker without breaking the whole export screen.
-- EC-7 (Repetition): Toggling the same item repeatedly → ends in the last chosen state.
-- EC-8 (Ordering): Turn category off then enable a child → category-off keeps children hidden until the category is on again (category master switch).
-- EC-9 (State transitions): Element deleted in editor after being toggled off for export → settings clean up without error.
-- EC-10 (Scale): All elements off and no location legend items → export blocked per US-017.
+- EC-1: Toggle all layers off → empty thematic map permitted; basemap still renders.
+- EC-2: Satellite basemap attribution remains reflected in fixed credit lines.
+- EC-3: Labels on dense point clusters → labels may overlap; still exportable without crash.
+- EC-4: Concurrent edits in another tab while export open → export uses the snapshot/session at open or last refresh; no silent corrupt download; product may export stale editor state for that session.
 
-## Tags
+## Location insets
 
-### US-008: Toggle element name tags globally
+### US-008: Location inset maps and regional styles
 
-**As a** map owner, **I want** one switch for element name tags, **so that** I can label features for the field or hide labels for a cleaner report figure.
+**As a** map owner, **I want** zero, one, or two location inset maps with state/municipality context, **so that** readers can situate the main map in Brazil.
 
 Acceptance criteria:
 
-- AC-1: Given visible elements with names, when I enable tags, then their names appear on the preview map.
-- AC-2: Given tags are enabled, when I disable tags, then names disappear from the map while geometries remain (if still visible).
-- AC-3: Given tags are enabled, when an element is hidden via US-007, then its name tag is not shown.
+- AC-1: Given location maps control, when I choose none, one, or two insets, then preview shows the corresponding number of inset maps (or hides them).
+- AC-2: Given one or two insets enabled, when I select state and optionally municipality, then insets update to show the selection and main-map context polygon behavior matches printJs intent (highlight region of interest).
+- AC-3: Given location layers options, when I enable municipal mesh and/or add state to the legend, then mesh appears on the map and legend items update as specified.
+- AC-4: Given color controls for state and municipality, when I change colors, then geometry styling and legend swatches update.
 
 Edge cases:
 
-- EC-1 (Invalid input): Element name with hostile content → displayed as safe text only.
-- EC-2 (Empty / missing): Visible element with blank name → no tag text is shown for that element.
-- EC-3 (Limits): Many overlapping tags → tags still render; overlap may occur without crashing (no auto-collision engine required in this PRD).
-- EC-4 (Permissions): Non-owner → cannot toggle tags.
-- EC-5 (Concurrency): Toggle tags while panning preview → ends in the last tag state.
-- EC-6 (Interruption): Preview interrupt → successful export never claims tags that were not in the final preview state.
-- EC-7 (Repetition): Rapid toggle → final state matches last action.
-- EC-8 (Ordering): Enable tags before elements finish loading → tags appear for visible named elements once loaded.
-- EC-9 (State transitions): Persisted tag preference restores on reopen.
-- EC-10 (Scale): Large name strings → tags remain on-map without breaking export.
+- EC-1: Geographic data for municipalities unavailable or service error → clear error/empty state; export of main map without insets still possible or blocked with message that insets cannot load (product must not silent-fail incomplete political layers as if complete).
+- EC-2: State selected without municipality when municipality is required by selected mode → prompts user to finish selection or proceeds with state-only as per mode rules mirroring printJs.
+- EC-3: Two insets with same state → allowed; both show independently.
+- EC-4: Municipal mesh with large vertex counts → may slow preview; UI shows progress; no uncaught failure.
+- EC-5: Switch from two insets to none → location UI and layers turn off cleanly in preview.
 
-## Basemap
+## Map chrome
 
-### US-009: Choose the export basemap including offline tiles
+### US-009: Scale, north, graticule, decorative frame, labels interaction
 
-**As a** map owner, **I want** to pick Claro, OSM, Satellite, or Offline tiles for the export, **so that** the PNG matches the basemap I need in the field or in a report.
+**As a** map owner, **I want** cartographic chrome on the main export map equivalent to printJs, **so that** the map is orientation- and scale-readable.
 
 Acceptance criteria:
 
-- AC-1: Given the basemap options, when I select Claro, OSM, or Satellite, then the preview and PNG use that basemap.
-- AC-2: Given Offline is selected and offline tiles are available for the view, when I preview/export, then those tiles are used.
-- AC-3: Given Offline is selected but required tiles are missing, when I preview or export, then I see a clear failure or incomplete-tiles message and am not told the export succeeded if the basemap is unusable.
+- AC-1: Given export preview and download, when I inspect the main map, then a graphic scale bar is present and consistent with the preview scale.
+- AC-2: Given export preview and download, when I inspect the main map, then a north indicator is present.
+- AC-3: Given export preview and download, when I inspect the main map, then a graticule is present per printJs default behavior.
+- AC-4: Given export composition, when I inspect the presentation, then the decorative frame treatment consistent with product/printJs branding is applied.
+- AC-5: Labels toggle (US-007) composes with the above chrome without removing scale/north/graticule.
 
 Edge cases:
 
-- EC-1 (Invalid input): Unknown basemap in persisted settings → fallback to a safe default (e.g., Claro) with visibility of the active choice.
-- EC-2 (Empty / missing): Offline folder empty → Offline cannot produce a successful basemap; user is informed.
-- EC-3 (Limits): Partial offline coverage → visible gaps are acceptable if communicated; export success requires a usable capture per product rules in TechSpec.
-- EC-4 (Permissions): Non-owner → cannot change basemap for export.
-- EC-5 (Concurrency): Switching basemaps quickly → preview settles on the latest selection.
-- EC-6 (Interruption): Tile network failure for online basemaps → error feedback; no false success toast.
-- EC-7 (Repetition): Re-selecting the same basemap → stable preview.
-- EC-8 (Ordering): Export before tiles finish loading → export waits or fails clearly rather than producing a blank basemap claimed as success.
-- EC-9 (State transitions): Restored basemap preference applies on reopen.
-- EC-10 (Scale): High DPI export with satellite tiles → may take longer; progress feedback remains visible.
+- EC-1: Extreme zoom (very far / very close) → scale bar updates to a sensible unit/label set or remains readable.
+- EC-2: Portrait vs landscape → chrome remains inside the map frame, not clipped out of composition permanently.
+- EC-3: Export at low DPI → chrome remains legible enough for thumbnail use; high DPI remains sharp for print.
 
-## Location maps
+## Download
 
-### US-010: Configure none, one, or two Brazil locator insets
+### US-010: Export file and failure recovery
 
-**As a** map owner, **I want** to add none, one, or two Brazil location insets, **so that** readers can situate the main map.
+**As a** map owner, **I want** to download the composed map as PNG or PDF with progress feedback, **so that** I receive a usable file or know how to recover.
 
 Acceptance criteria:
 
-- AC-1: Given I choose **None**, when I preview, then no locator insets appear and state/municipality selection is not required for export.
-- AC-2: Given I choose **1 map**, when state and municipality are selected, then one inset shows the state with the municipality highlighted.
-- AC-3: Given I choose **2 maps**, when state and municipality are selected, then two insets appear: South America context highlighting Brazil/state, and the state with the municipality highlighted.
-- AC-4: Given 1 or 2 maps without both state and municipality, when I try to export, then export is blocked with clear guidance (US-017).
+- AC-1: Given valid settings, when I confirm export, then a loading state indicates generation is in progress and concurrent double-submit is prevented or safely ignored.
+- AC-2: Given successful generation, when complete, then the browser receives a download of the selected format reflecting the last previewed composition.
+- AC-3: Given generation failure (memory, capture error, incomplete render timeout), when it fails, then I see an understandable error and can retry after adjusting DPI or simplifying layout.
+- AC-4: Given legend-heavy maps, when I choose PDF despite guidance, then export still attempts; success or failure is communicated honestly.
 
 Edge cases:
 
-- EC-1 (Invalid input): Municipality not belonging to the selected state → rejected or cleared until a valid pair is chosen.
-- EC-2 (Empty / missing): State chosen without municipality (or the reverse) while insets > 0 → export blocked; preview indicates incompleteness.
-- EC-3 (Limits): Boundary geometry very detailed → insets still render acceptably for preview/export (simplification allowed in TechSpec).
-- EC-4 (Permissions): Non-owner → cannot configure insets.
-- EC-5 (Concurrency): Changing state while municipality list loads → stale municipality cannot remain selected incorrectly.
-- EC-6 (Interruption): Boundary fetch fails → clear error; export does not succeed with empty insets when insets were requested.
-- EC-7 (Repetition): Switching None → 1 → 2 repeatedly → layout remains consistent with the latest choice.
-- EC-8 (Ordering): Pick municipality before state → UI requires state first or clears invalid municipality.
-- EC-9 (State transitions): Persisted location selection restores; if a municipality code disappears from the catalog → user must reselect.
-- EC-10 (Scale): All Brazilian municipalities available over time → selection remains searchable/usable.
+- EC-1: Cancel/close while generating → generation aborts or result is discarded; no partial UI freeze; editor remains usable.
+- EC-2: Retry after success → second file can be generated (action may be repeated).
+- EC-3: Network loss mid-tile-load for basemap before capture → fail or wait with message; no successful export implying full basemap if tiles missing without warning.
+- EC-4: Very long composition at max DPI → progress remains visible until success or failure.
+- EC-5: Filename defaults sensibly from map title/name and format extension.
 
-### US-011: Style location layers on the main map and legend
+## Responsiveness
 
-**As a** map owner, **I want** to control whether state and municipality appear on the legend and to set their colors, and optionally show municipal mesh on the main map, **so that** location context matches my cartographic needs.
+### US-011: Full composition UX on mobile
+
+**As a** map owner on a phone, **I want** every export control reachable and the preview usable, **so that** I can finish export without a desktop.
 
 Acceptance criteria:
 
-- AC-1: Given a selected municipality, when the preview updates, then the main map shows the municipality outline using the chosen municipality color.
-- AC-2: Given I enable “add state to legend” (or equivalent), when preview updates, then the state appears as a legend entry with its color; when disabled, it does not.
-- AC-3: Given I enable municipal mesh on map and legend, when preview updates, then mesh appears on the main map and as appropriate legend content; when disabled, it does not.
-- AC-4: Given I change state and municipality colors, when preview updates, then fills/outlines and legend swatches match those colors.
+- AC-1: Given a narrow viewport, when I open export, then controls stack or scroll and all option groups remain reachable (format, paper, legend, layers, location, colors).
+- AC-2: Given mobile, when I update options, then I can still inspect a usable preview (scroll or scaled) before export.
+- AC-3: Given mobile, when I export at moderate DPI, then download succeeds under normal conditions or fails with recovery guidance at extreme settings.
 
 Edge cases:
 
-- EC-1 (Invalid input): Invalid color values in persistence → fallback to defaults.
-- EC-2 (Empty / missing): Insets set to None → location styling controls that depend on a selection are hidden or inactive; no orphan location geometries on the main map unless TechSpec defines an independent main-map location mode (default: location overlays require a selected state/municipality).
-- EC-3 (Limits): Mesh at continental zoom → remains usable without freezing the UI.
-- EC-4 (Permissions): Non-owner → cannot change location styling.
-- EC-5 (Concurrency): Color changes while boundaries load → final colors apply to loaded geometries.
-- EC-6 (Interruption): Failure applying mesh → error visible; no silent partial success on export.
-- EC-7 (Repetition): Toggling legend checkboxes → legend entries appear/disappear accordingly.
-- EC-8 (Ordering): Enable legend entries before selecting municipality → entries appear once selection exists.
-- EC-9 (State transitions): Changing municipality updates outline, mesh, and legend names.
-- EC-10 (Scale): Mesh for large states → performance remains acceptable for interactive preview.
+- EC-1: Landscape phone vs portrait phone → both support full control access.
+- EC-2: On-screen keyboard covering title field → field remains editable/scrollable into view.
+- EC-3: Touch drag for legend resize/position when that interaction is part of parity → works with touch or an equivalent mobile-safe control.
+- EC-4: Low-end device OOM at 600 DPI → error recovery (US-010), not silent blank download.
 
-## Page setup
+## Session lifecycle
 
-### US-012: Choose paper size, orientation, and DPI
+### US-012: Close and cancel discard ephemeral config
 
-**As a** map owner, **I want** to set paper size, orientation, and DPI, **so that** one PNG works for documents and for sharing at adequate resolution.
+**As a** map owner, **I want** export options discarded when I leave the export UI, **so that** each open starts from clean defaults plus current editor map state.
 
 Acceptance criteria:
 
-- AC-1: Given paper size and orientation options, when I change them, then the preview frame reflects the new page arrangement live.
-- AC-2: Given a DPI choice, when I export, then the generated PNG uses that resolution setting.
-- AC-3: Given I change these settings, when I reopen export for the map, then the last values restore (US-016).
+- AC-1: Given I change DPI, legend position, and insets, when I close/cancel export and reopen, then those options reset to product defaults and map state re-inherits from the editor at the new open time.
+- AC-2: Given I export successfully, when I close export (or remain), then no server-side “print layout” is required to remain for reopening with the same options.
+- AC-3: Given I only cancel, when returning to editor, then I continue editing the map without forced navigation away from the editor.
 
 Edge cases:
 
-- EC-1 (Invalid input): Unsupported paper/DPI in persistence → clamp or fallback to supported defaults.
-- EC-2 (Empty / missing): Missing DPI → use a documented default (existing product default 300 unless TechSpec changes it).
-- EC-3 (Limits): Maximum DPI on low-memory devices → failure is reported rather than crashing the app.
-- EC-4 (Permissions): Non-owner → cannot change page setup.
-- EC-5 (Concurrency): Changing DPI during an in-flight export → in-flight export uses the values captured at start; a new export uses the latest values.
-- EC-6 (Interruption): Export cancelled/failing at high DPI → no success toast; partial files are not presented as complete.
-- EC-7 (Repetition): Re-export at same settings → produces a new PNG with the same configuration.
-- EC-8 (Ordering): Change orientation after placing an inside legend → legend remains valid inside the updated map area or is adjusted safely.
-- EC-9 (State transitions): Restored landscape/portrait matches last save.
-- EC-10 (Scale): Large paper + high DPI + satellite → longer generation with visible progress.
-
-## Preview
-
-### US-013: See a live preview of the full composition
-
-**As a** map owner, **I want** the preview to update as I change options, **so that** the PNG matches what I see.
-
-Acceptance criteria:
-
-- AC-1: Given any supported option change, when I finish the change, then the preview updates without requiring a mandatory “Atualizar Preview” step.
-- AC-2: Given the preview, when I inspect it, then I see map content, legend (as configured), always-on graticule, scale bar, north arrow, title when set, and footer with logo.
-
-Edge cases:
-
-- EC-1 (Invalid input): Conflicting option combinations → preview shows a coherent state and validation messages when export is blocked.
-- EC-2 (Empty / missing): Waiting for tiles/boundaries → preview shows loading indicators rather than a falsely complete map.
-- EC-3 (Limits): Continuous rapid changes → preview may coalesce updates but ends matching the latest options.
-- EC-4 (Permissions): Non-owner → no preview screen.
-- EC-5 (Concurrency): Preview render overlaps → no torn UI; latest config wins.
-- EC-6 (Interruption): Render error → visible error; export not marked successful.
-- EC-7 (Repetition): Reopening the screen → preview builds from persisted settings.
-- EC-8 (Ordering): Options change before map data ready → preview completes when data arrives.
-- EC-9 (State transitions): Switching basemap mid-preview → final basemap is the selected one.
-- EC-10 (Scale): Complex composition → preview remains navigable on phone-width layouts (stacked or scrollable controls acceptable).
-
-## Footer
-
-### US-014: See institutional footer and logo on the composition
-
-**As a** map owner, **I want** the RealCarto / (R)EAT / FURG footer and logo on the PNG, **so that** institutional attribution is consistent.
-
-Acceptance criteria:
-
-- AC-1: Given any successful preview/export, when I view the composition bottom, then the institutional information block and logo treatment are present.
-- AC-2: Given author and/or technical responsible values, when present, then they appear in the footer area without removing the institutional lines.
-
-Edge cases:
-
-- EC-1 (Invalid input): Broken logo asset → text attribution remains; user still sees institutional identity in text form.
-- EC-2 (Empty / missing): Optional technical responsible blank → institutional block still present.
-- EC-3 (Limits): Narrow page width → footer wraps or scales text while remaining readable.
-- EC-4 (Permissions): N/A beyond owner-only access to the screen.
-- EC-5 (Concurrency): N/A for static footer content.
-- EC-6 (Interruption): Logo load failure during export → export fails clearly or proceeds with documented fallback; never silently omits all attribution.
-- EC-7 (Repetition): Multiple exports → footer content remains consistent.
-- EC-8 (Ordering): Metadata entered after first glance → footer updates live.
-- EC-9 (State transitions): N/A.
-- EC-10 (Scale): High DPI → logo remains sharp enough for document use.
-
-## Export
-
-### US-015: Export the composition as PNG
-
-**As a** map owner, **I want** to generate a PNG of the composition, **so that** I can insert it into documents or share it from my phone.
-
-Acceptance criteria:
-
-- AC-1: Given all export gates pass (US-017), when I confirm export, then the product generates a PNG of the current preview composition.
-- AC-2: Given a web browser session, when export succeeds, then the PNG downloads to the device.
-- AC-3: Given a native Capacitor session, when export succeeds, then I can share/save via the platform share flow.
-- AC-4: Given export is running, when it completes or fails, then I see clear success or failure feedback.
-
-Edge cases:
-
-- EC-1 (Invalid input): Export triggered while gates fail → blocked with guidance; no file.
-- EC-2 (Empty / missing): Preview element unavailable → failure message; no success.
-- EC-3 (Limits): Extremely large canvas → failure or progress with possible memory error message; no crash without feedback.
-- EC-4 (Permissions): Session ends mid-export → failure; no unauthorized file claim.
-- EC-5 (Concurrency): Double-click export → only one generation runs or a second is ignored until the first finishes.
-- EC-6 (Interruption): User cancels dismisses modal during generation → generation stops or result is discarded; no surprise success after close without user intent.
-- EC-7 (Repetition): Export again after success → a new PNG is produced.
-- EC-8 (Ordering): Change an option during generation → in-flight capture uses the configuration taken at start.
-- EC-9 (State transitions): PDF is not offered as an output choice in this feature.
-- EC-10 (Scale): Long generation → loading indicator remains until success or failure.
-
-## Persistence
-
-### US-016: Reopen export with the last settings for that map
-
-**As a** map owner, **I want** my export settings remembered per map, **so that** I do not rebuild the layout every time.
-
-Acceptance criteria:
-
-- AC-1: Given I configured export options and leave the screen, when I reopen export for the same map, then the previous options are restored.
-- AC-2: Given two different owned maps, when I open export on each, then each map restores its own settings without cross-mixing.
-
-Edge cases:
-
-- EC-1 (Invalid input): Corrupted saved settings → fall back to defaults without crashing.
-- EC-2 (Empty / missing): First open for a map → documented defaults are used.
-- EC-3 (Limits): Settings blob grows with many element visibility flags → still loads; stale element ids ignored.
-- EC-4 (Permissions): Another user signing in on the same device → cannot see or apply my map’s export settings for maps they do not own.
-- EC-5 (Concurrency): Saving from two devices → TechSpec defines merge/last-write behavior without corrupting map geometries.
-- EC-6 (Interruption): Save fails → user can still export in-session; next open may miss the latest values with no silent geometry loss.
-- EC-7 (Repetition): Saving identical settings → idempotent.
-- EC-8 (Ordering): Export success before persistence flush → next open still aims to restore last known good settings.
-- EC-9 (State transitions): Map deleted → settings are removed or become unreachable.
-- EC-10 (Scale): Many maps with saved settings → opening one map’s export stays fast enough to use.
-
-## Validation
-
-### US-017: Meet export gates before generating the PNG
-
-**As a** map owner, **I want** clear blocking rules before export, **so that** I do not produce incomplete or unattributed PNGs.
-
-Acceptance criteria:
-
-- AC-1: Given blank title or blank author, when I try to export, then export is blocked and the missing fields are identified.
-- AC-2: Given location insets are 1 or 2 and state or municipality is missing, when I try to export, then export is blocked and the preview/options explain what is missing.
-- AC-3: Given no visible drawn element on the map and no legend item (including enabled location legend entries), when I try to export, then export is blocked.
-- AC-4: Given all gates pass, when I export, then PNG generation proceeds (US-015).
-
-Edge cases:
-
-- EC-1 (Invalid input): Whitespace-only title/author → treated as blank and blocked.
-- EC-2 (Empty / missing): Optional technical responsible blank → does not block.
-- EC-3 (Limits): N/A beyond other stories’ limits.
-- EC-4 (Permissions): Non-owner never reaches a successful export.
-- EC-5 (Concurrency): Fixing a gate while a blocked export click is in flight → only a new export attempt after gates pass succeeds.
-- EC-6 (Interruption): Network error is separate from gate blocking → gates are local composition rules.
-- EC-7 (Repetition): Clicking export while blocked → remains blocked with the same guidance.
-- EC-8 (Ordering): Enabling a location legend item while all drawn elements are hidden → can satisfy the “at least one legend item” rule if that entry is present.
-- EC-9 (State transitions): Turning insets from 2 to None removes the state/municipality requirement even if selectors are empty.
-- EC-10 (Scale): Many failing reasons at once → all applicable gate messages are discoverable (not only the first forever hidden).
+- EC-1: Browser refresh mid-export UI → session options lost; user restarts export after reload (consistent with ephemeral rules).
+- EC-2: Navigate away from editor mid-export UI → export UI tears down; options discarded.
+- EC-3: Open export, change settings, background the mobile app briefly → session may keep in-memory state while still open; discarding only occurs on close/teardown, not arbitrary hide.

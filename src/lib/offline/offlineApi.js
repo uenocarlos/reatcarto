@@ -86,6 +86,7 @@ export async function offlineCreateElement(payload, clientMutationId = newMutati
     description: payload.description ?? '',
     element_category: payload.element_category ?? 'terra',
     style: typeof payload.style === 'string' ? JSON.parse(payload.style) : payload.style ?? {},
+    is_publicly_visible: payload.is_publicly_visible !== false && payload.is_publicly_visible !== 0,
     version: 0,
     _pending: true,
     photos: [],
@@ -105,6 +106,7 @@ export async function offlineCreateElement(payload, clientMutationId = newMutati
       description: element.description,
       element_category: element.element_category,
       style: element.style,
+      is_publicly_visible: element.is_publicly_visible,
     },
   });
   return { ...element, client_mutation_id: clientMutationId, _queued: true };

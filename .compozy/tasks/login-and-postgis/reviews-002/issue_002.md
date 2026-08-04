@@ -3,7 +3,7 @@ provider: manual
 pr:
 round: 2
 round_created_at: 2026-08-02T19:07:59Z
-status: pending
+status: resolved
 file: php/lib/Elements/ElementService.php
 line: 249
 severity: high
@@ -27,5 +27,9 @@ Suggested fix: mirror `maps_update` / `maps_delete` — require `base_version` (
 
 ## Triage
 
-- Decision: `UNREVIEWED`
-- Notes:
+- Decision: `valid`
+- Root cause: The review snapshot showed the old conditional (`$baseVersion !== null && …`) that skipped optimistic locking when `base_version` was omitted, allowing silent last-write-wins on element update/delete.
+- Fix approach: Mirror `maps_update` / `maps_delete` — reject missing `base_version` with 400 `validation_error` unless `force_version` is set; compare versions and return 409 on mismatch.
+- Resolution: `elements_update` and `elements_delete` in `php/lib/Elements/ElementService.php` already enforce the contract (lines 247–261 and 355–368), matching `MapService.php`. Regression coverage exists in `tests/php/Elements/ElementsCrudTest.php` (`testIt038UpdateRequiresBaseVersion`, `testIt039DeleteRequiresBaseVersion`). No code changes were required in this batch.
+- Out of scope: `photos_delete` in `PhotoService.php` was mentioned in the review comment but is not in this batch's code-file scope; track separately if still open.
+- Verification: `npm run lint`, `npm run typecheck`, and `npm test` passed (405/405). `composer test` could not complete in this environment because PostgreSQL lost `citext` after test schema resets (257/269 errors, all `PDOException` during migration setup — pre-existing local DB infra, unrelated to this fix). Prior rounds on a healthy PostGIS test DB report 269/269 pass with the same tests.

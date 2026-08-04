@@ -54,14 +54,11 @@ async function syncUploadOfflinePhoto(mutation, photoStore) {
   };
 }
 
-import { normalizeExportSettings } from '@/lib/export/exportSettings';
-
 function normalizeMap(map) {
   if (!map) return map;
   return {
     ...map,
     created_date: map.created_at ?? map.created_date,
-    export_settings: normalizeExportSettings(map.export_settings ?? {}),
   };
 }
 
@@ -76,6 +73,7 @@ function normalizeElement(element) {
     ...element,
     style,
     geojson,
+    is_publicly_visible: element.is_publicly_visible !== false && element.is_publicly_visible !== 0,
     photo_urls: photos.map((p) => p.url || `/php/photos/get.php?id=${encodeURIComponent(p.id)}`),
     photos,
   };
@@ -194,55 +192,45 @@ export const api = {
       },
       update: async (id, payload, clientMutationId = newMutationIdInternal()) => {
         const { version, base_version, ...rest } = payload;
-        const isSettingsOnly =
-          Object.prototype.hasOwnProperty.call(rest, 'export_settings') &&
-          Object.keys(rest).every((key) => key === 'export_settings');
         const body = {
           id,
           ...rest,
           client_mutation_id: clientMutationId,
+          base_version: base_version ?? version ?? payload.base_version ?? payload.version,
         };
-        if (!isSettingsOnly) {
-          body.base_version = base_version ?? version ?? payload.base_version ?? payload.version;
-        }
         const data = await apiFetch('/maps/update.php', {
           method: 'PATCH',
           body,
         });
-        const normalized = normalizeMap(data.map);
-        if (isSettingsOnly) {
-          try {
-            await storeForUser().upsertPreparedMap({
-              id,
-              export_settings: normalized.export_settings,
-            });
-          } catch {
-            /* offline store unavailable without authenticated user */
-          }
-        }
-        return normalized;
+        return normalizeMap(data.map);
       },
-      delete: async (id, clientMutationId = newMutationIdInternal()) => {
+      delete: async (id, baseVersion, clientMutationId = newMutationIdInternal()) => {
+        const body = { id, client_mutation_id: clientMutationId };
+        if (baseVersion != null) body.base_version = baseVersion;
         return apiFetch('/maps/delete.php', {
           method: 'DELETE',
-          body: { id, client_mutation_id: clientMutationId },
+          body,
         });
       },
       publish: async (id, options = {}, clientMutationId = newMutationIdInternal()) => {
+        const body = {
+          id,
+          ...(options.confirmEmpty ? { confirm_empty: true } : {}),
+          client_mutation_id: clientMutationId,
+        };
+        if (options.baseVersion != null) body.base_version = options.baseVersion;
         const data = await apiFetch('/maps/publish.php', {
           method: 'POST',
-          body: {
-            id,
-            ...(options.confirmEmpty ? { confirm_empty: true } : {}),
-            client_mutation_id: clientMutationId,
-          },
+          body,
         });
         return normalizeMap(data.map);
       },
-      unpublish: async (id, clientMutationId = newMutationIdInternal()) => {
+      unpublish: async (id, baseVersion, clientMutationId = newMutationIdInternal()) => {
+        const body = { id, client_mutation_id: clientMutationId };
+        if (baseVersion != null) body.base_version = baseVersion;
         const data = await apiFetch('/maps/unpublish.php', {
           method: 'POST',
-          body: { id, client_mutation_id: clientMutationId },
+          body,
         });
         return normalizeMap(data.map);
       },
@@ -314,6 +302,7 @@ export const api = {
           'geojson',
           'style',
           'element_type',
+          'is_publicly_visible',
         ]) {
           if (payload[key] !== undefined) {
             if (key === 'style' && typeof payload[key] !== 'string') {
@@ -441,8 +430,14 @@ export const api = {
       if (page) params.set('page', String(page));
       if (pageSize) params.set('page_size', String(pageSize));
       const data = await apiFetch(`/public/elements.php?${params}`, { method: 'GET' });
+      const safeNormalize = (el) => {
+        const normalized = normalizeElement(el);
+        delete normalized.map_id;
+        delete normalized.author_id;
+        return normalized;
+      };
       return {
-        elements: (data.elements ?? []).map(normalizeElement),
+        elements: (data.elements ?? []).map(safeNormalize),
         pagination: data.pagination,
       };
     },

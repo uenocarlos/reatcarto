@@ -104,14 +104,17 @@ function public_elements_list(string $publicId, int $page = 1, int $pageSize = D
     $pageSize = min(MAX_PAGE_SIZE, max(1, $pageSize));
     $offset = ($page - 1) * $pageSize;
 
-    $countStmt = db()->prepare('SELECT COUNT(*) FROM map_elements WHERE map_id = :map_id');
+    $countStmt = db()->prepare(
+        'SELECT COUNT(*) FROM map_elements
+         WHERE map_id = :map_id AND is_publicly_visible = true'
+    );
     $countStmt->execute(['map_id' => $mapId]);
     $total = (int) $countStmt->fetchColumn();
 
     $stmt = db()->prepare(
         'SELECT e.*, ST_AsGeoJSON(e.geom)::text AS geojson
          FROM map_elements e
-         WHERE e.map_id = :map_id
+         WHERE e.map_id = :map_id AND e.is_publicly_visible = true
          ORDER BY e.created_at ASC
          LIMIT :limit OFFSET :offset'
     );
@@ -123,7 +126,7 @@ function public_elements_list(string $publicId, int $page = 1, int $pageSize = D
     $elements = [];
     while ($elementRow = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $photos = photos_for_element_public((string) $elementRow['id']);
-        $elements[] = format_element_record($elementRow, $photos);
+        $elements[] = format_public_element_record($elementRow, $photos);
     }
 
     return [

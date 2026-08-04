@@ -1,35 +1,35 @@
 # Task Memory: task_01.md
 
-Keep only task-local execution context here. Do not duplicate facts that are obvious from the repository, task file, PRD documents, or git history.
-
 ## Objective Snapshot
 
-Contrato e persistência de `export_settings`: migration JSONB, LWW settings-only no MapService, strip em PublicService, módulo `exportSettings.js`, mirror IndexedDB.
+Delivered pure client-side export foundation: branding assets, session API, geo loader, preview debounce, scale helpers, and `generateExport` pipeline.
 
 ## Important Decisions
 
-- Public strip via `format_public_map_summary` whitelist (nunca inclui `export_settings`) — não unset explícito.
-- Settings-only branch em `maps_update` quando input contém só `id` + `export_settings` (+ opcional `client_mutation_id`); sem bump de `version`.
-- Debounce helper colocado em `exportSettings.js` (`createDebouncedExportSettingsPersist`, delay default 400ms).
+- Geo paths follow repo layout (`/geo/ufs.geojson`, `/geo/municipios/{id}.geojson`) over TechSpec fictional monolithic names.
+- `assertExportTitle` returns `{ ok, code }` object; `generateExport` maps empty title to `validation` code before capture.
+- Legend font px out-of-range values clamp to 8–18 (UT-025).
+- `mapCaptureError` maps memory/allocation errors to `memory`, others to `capture`.
+- Session `elements` shallow-cloned per element at open for UT-016 freeze semantics.
 
 ## Learnings
 
-- Implementação já existia (entregue incrementalmente com tasks 02–05); esta execução validou contrato + testes e fechou tracking.
+- UF GeoJSON uses `sigla`/`nome`/`id`; municipio files use `id`/`nome`/`uf`.
+- Institutional footer REAT string is `(R)EAT` in printJs copy, not bare `REAT`.
 
 ## Files / Surfaces
 
-- `php/migrations/006_export_settings.sql`
-- `php/lib/Maps/MapService.php` — `decode_export_settings_column`, `validate_export_settings_payload`, settings-only branch
-- `php/lib/Public/PublicService.php` — DTO público omite settings por design
-- `src/lib/export/exportSettings.js`
-- `src/api/apiClient.js` — `normalizeMap`, settings-only PATCH sem `base_version`
-- `tests/php/Maps/ExportSettingsTest.php`
-- `tests/js/exportSettings.test.js`, `tests/js/offline.test.js`
+- `public/export/logoreat.png`, `public/export/north.png`
+- `src/lib/export/*` (branding, constants, session, legendItems, previewSync, geoBoundaries, scale, generateExport, index)
+- `tests/js/setup.js`, `tests/js/export*.test.js`, `tests/js/generateExport.test.js`
+- `package.json` (+ `html-to-image`)
 
 ## Errors / Corrections
 
-- Nenhuma correção de código necessária nesta execução.
+- UT-016 failed until elements were cloned per-object in session factory.
+- UT-030 test adjusted to match `(R)EAT` institutional string.
 
 ## Ready for Next Run
 
-- Task concluída e verificada. Tasks 02–05 já dependiam deste contrato e estão operacionais.
+- task_02/03 should import from `@/lib/export` index; no module-level session singleton exists.
+- Geo cache reset via `resetGeoBoundariesCache()` in tests only.

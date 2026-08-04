@@ -62,7 +62,7 @@ function photos_for_element(string $elementId): array
 function fetch_photo_by_id(string $photoId): ?array
 {
     $stmt = db()->prepare(
-        'SELECT p.*, e.map_id, m.owner_id, m.is_published, m.moderated_at, u.status AS owner_status
+        'SELECT p.*, e.map_id, e.is_publicly_visible, m.owner_id, m.is_published, m.moderated_at, u.status AS owner_status
          FROM photos p
          JOIN map_elements e ON e.id = p.element_id
          JOIN maps m ON m.id = e.map_id
@@ -81,7 +81,7 @@ function photo_can_read(?array $user, array $photo): bool
         return true;
     }
 
-    return map_is_public_eligible($photo);
+    return map_is_public_eligible($photo) && element_is_publicly_visible($photo);
 }
 
 /**
@@ -219,7 +219,7 @@ function photos_upload(array $user, array $files, array $input): array
     return $result;
 }
 
-function photos_delete(array $user, array $input): array
+function photos_delete(array $user, array $input, bool $forceVersion = false): array
 {
     $photoId = (string) ($input['id'] ?? '');
     $clientMutationId = trim((string) ($input['client_mutation_id'] ?? ''));
@@ -241,10 +241,15 @@ function photos_delete(array $user, array $input): array
         auth_fail('forbidden', 'You do not have access to this photo.', 403);
     }
 
-    if ($baseVersion !== null && (int) $baseVersion !== (int) $photo['version']) {
+    if (!$forceVersion && $baseVersion === null) {
+        auth_fail('validation_error', 'Validation failed.', 400, [
+            'base_version' => 'base_version is required.',
+        ]);
+    }
+    if (!$forceVersion && (int) $baseVersion !== (int) $photo['version']) {
         json_conflict(
             'Photo version conflict.',
-            ['id' => $photoId, 'base_version' => (int) $baseVersion],
+            ['id' => $photoId, 'base_version' => (int) $baseVersion, 'op' => 'delete'],
             [
                 'id' => $photoId,
                 'version' => (int) $photo['version'],
@@ -336,7 +341,7 @@ function photos_serve_bytes(?array $user, string $photoId, bool $publicOnly): ne
     }
 
     if ($publicOnly) {
-        if (!map_is_public_eligible($photo)) {
+        if (!map_is_public_eligible($photo) || !element_is_publicly_visible($photo)) {
             auth_fail('not_found', 'Photo not found.', 404);
         }
     } elseif (!photo_can_read($user, $photo)) {

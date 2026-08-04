@@ -75,12 +75,13 @@ export default function Dashboard() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => api.entities.Map.delete(id),
+    mutationFn: ({ id, version }) => api.entities.Map.delete(id, version),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps'] }),
   });
 
   const publishMutation = useMutation({
-    mutationFn: ({ id, confirmEmpty }) => api.entities.Map.publish(id, { confirmEmpty }),
+    mutationFn: ({ id, confirmEmpty, baseVersion }) =>
+      api.entities.Map.publish(id, { confirmEmpty, baseVersion }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maps'] });
       setPublishMap(null);
@@ -97,7 +98,7 @@ export default function Dashboard() {
   });
 
   const unpublishMutation = useMutation({
-    mutationFn: (id) => api.entities.Map.unpublish(id),
+    mutationFn: ({ id, version }) => api.entities.Map.unpublish(id, version),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maps'] });
       toast.success('Mapa removido da galeria pública');
@@ -110,7 +111,11 @@ export default function Dashboard() {
   };
 
   const handleUpdate = () => {
-    updateMutation.mutate({ id: editMap.id, data: formData });
+    const data = { ...formData };
+    if (editMap?.version != null) {
+      data.base_version = editMap.version;
+    }
+    updateMutation.mutate({ id: editMap.id, data });
   };
 
   const handleLogout = async () => {
@@ -292,7 +297,7 @@ export default function Dashboard() {
                               disabled={unpublishMutation.isPending}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                unpublishMutation.mutate(map.id);
+                                unpublishMutation.mutate({ id: map.id, version: map.version });
                               }}
                             >
                               <EyeOff className="w-3.5 h-3.5" />
@@ -319,7 +324,7 @@ export default function Dashboard() {
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); openEdit(map); }}>
                             <Pencil className="w-3.5 h-3.5" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(map.id); }}>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); deleteMutation.mutate({ id: map.id, version: map.version }); }}>
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
                         </div>
@@ -417,6 +422,7 @@ export default function Dashboard() {
                 publishMutation.mutate({
                   id: publishMap.id,
                   confirmEmpty: publishConfirmEmpty,
+                  baseVersion: publishMap?.version,
                 })
               }
               disabled={publishMutation.isPending}

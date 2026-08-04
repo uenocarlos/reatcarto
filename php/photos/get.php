@@ -12,10 +12,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 }
 
 start_session();
-$userId = current_user_id();
 $user = null;
-if ($userId !== null) {
-    $user = fetch_user_by_id($userId);
+try {
+    $user = require_valid_session();
+} catch (AuthException $e) {
+    if ($e->errorCode !== 'unauthenticated') {
+        throw $e;
+    }
 }
 
 try {

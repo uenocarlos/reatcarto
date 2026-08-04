@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Search, Globe, ChevronLeft, ChevronRight } from 'lucide-react';
 import { isOnline } from '@/lib/offline/connectivity';
+import { useAuth } from '@/lib/AuthContext';
 
 function mergeMaps(existing, incoming) {
   const seen = new Set(existing.map((m) => m.public_id));
@@ -23,6 +24,7 @@ function mergeMaps(existing, incoming) {
 
 export default function Gallery() {
   const navigate = useNavigate();
+  const { isAuthenticated, isLoadingAuth } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [page, setPage] = useState(Number(searchParams.get('page') || 1));
@@ -76,9 +78,15 @@ export default function Gallery() {
                 <p className="text-primary-foreground/80 text-sm">Mapas publicados pela comunidade</p>
               </div>
             </div>
-            <Button variant="secondary" size="sm" asChild>
-              <Link to="/login">Entrar</Link>
-            </Button>
+            {!isLoadingAuth && (
+              <Button variant="secondary" size="sm" asChild>
+                {isAuthenticated ? (
+                  <Link to="/">Meus mapas</Link>
+                ) : (
+                  <Link to="/login">Entrar</Link>
+                )}
+              </Button>
+            )}
           </div>
         </div>
       </div>

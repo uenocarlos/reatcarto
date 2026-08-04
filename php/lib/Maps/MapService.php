@@ -11,255 +11,6 @@ function json_conflict(
     throw new ConflictException($message, $localSnapshot, $remoteSnapshot, $kind);
 }
 
-/**
- * @param array<string, mixed> $row
- * @return array<string, mixed>
- */
-function decode_export_settings_column(mixed $raw): array
-{
-    if ($raw === null || $raw === '') {
-        return [];
-    }
-    if (is_array($raw)) {
-        return $raw;
-    }
-    if (is_string($raw)) {
-        $decoded = json_decode($raw, true);
-
-        return is_array($decoded) ? $decoded : [];
-    }
-
-    return [];
-}
-
-const MAX_EXPORT_SETTINGS_BYTES = 32768;
-
-/**
- * @return array<string, mixed>
- */
-function default_export_settings(): array
-{
-    return [
-        'title' => '',
-        'author' => '',
-        'technicalResponsible' => '',
-        'legendPosition' => 'inside',
-        'legendRect' => null,
-        'legendColumns' => 2,
-        'legendFontSizePx' => 12,
-        'legendSpacing' => 'normal',
-        'hiddenCategoryIds' => [],
-        'hiddenElementIds' => [],
-        'showTags' => false,
-        'basemap' => 'carto',
-        'locatorCount' => 0,
-        'stateCode' => null,
-        'municipalityCode' => null,
-        'stateColor' => '#1D4ED8',
-        'municipalityColor' => '#DC2626',
-        'showStateInLegend' => false,
-        'showMunicipalityInLegend' => false,
-        'showMunicipalMesh' => false,
-        'paperSize' => 'A4',
-        'orientation' => 'landscape',
-        'dpi' => 300,
-    ];
-}
-
-function sanitize_export_text(mixed $value): string
-{
-    if (!is_string($value)) {
-        return '';
-    }
-    $stripped = preg_replace('/<[^>]*>/', '', $value);
-
-    return trim(preg_replace('/[\x00-\x1F\x7F]/', '', $stripped ?? '') ?? '');
-}
-
-function clamp_export_int(mixed $value, int $min, int $max, int $fallback): int
-{
-    if ($value === null || $value === '') {
-        return $fallback;
-    }
-    if (!is_numeric($value)) {
-        return $fallback;
-    }
-    $n = (int) round((float) $value);
-
-    return min($max, max($min, $n));
-}
-
-/**
- * @return list<string>
- */
-function as_export_string_array(mixed $value, int $maxItems): array
-{
-    if (!is_array($value)) {
-        return [];
-    }
-
-    $result = [];
-    foreach ($value as $item) {
-        if (!is_string($item) || $item === '') {
-            continue;
-        }
-        if (strlen($item) > MAX_MAP_NAME_LENGTH) {
-            continue;
-        }
-        $result[] = $item;
-        if (count($result) >= $maxItems) {
-            break;
-        }
-    }
-
-    return $result;
-}
-
-/**
- * @return array{x: float, y: float, w: float, h: float}|null
- */
-function normalize_export_legend_rect(mixed $raw, string $legendPosition): ?array
-{
-    if ($legendPosition !== 'inside' || !is_array($raw)) {
-        return null;
-    }
-
-    $coords = ['x', 'y', 'w', 'h'];
-    $parsed = [];
-    foreach ($coords as $key) {
-        if (!array_key_exists($key, $raw) || !is_numeric($raw[$key])) {
-            return null;
-        }
-        $parsed[$key] = (float) $raw[$key];
-    }
-
-    return [
-        'x' => min(1.0, max(0.0, $parsed['x'])),
-        'y' => min(1.0, max(0.0, $parsed['y'])),
-        'w' => min(1.0, max(0.0, $parsed['w'])),
-        'h' => min(1.0, max(0.0, $parsed['h'])),
-    ];
-}
-
-function normalize_export_legend_position(mixed $raw): string
-{
-    if ($raw === 'right') {
-        return 'beside';
-    }
-    if (is_string($raw) && in_array($raw, ['inside', 'beside', 'below'], true)) {
-        return $raw;
-    }
-
-    return 'inside';
-}
-
-function normalize_export_locator_count(mixed $raw): int
-{
-    if (!is_numeric($raw)) {
-        return 0;
-    }
-    $n = (int) $raw;
-    if ($n === 1 || $n === 2) {
-        return $n;
-    }
-
-    return 0;
-}
-
-function normalize_export_hex_color(mixed $raw, string $fallback): string
-{
-    if (!is_string($raw)) {
-        return $fallback;
-    }
-    $trimmed = trim($raw);
-    if (preg_match('/^#([0-9A-Fa-f]{6})$/', $trimmed) === 1) {
-        return $trimmed;
-    }
-
-    return $fallback;
-}
-
-/**
- * @param array<string, mixed> $raw
- * @return array<string, mixed>
- */
-function normalize_export_settings(array $raw): array
-{
-    $defaults = default_export_settings();
-    $legendPosition = normalize_export_legend_position($raw['legendPosition'] ?? null);
-    $stateCode = isset($raw['stateCode']) && is_string($raw['stateCode']) && trim($raw['stateCode']) !== ''
-        ? $raw['stateCode']
-        : null;
-    $municipalityCode = isset($raw['municipalityCode']) && is_string($raw['municipalityCode']) && trim($raw['municipalityCode']) !== ''
-        ? $raw['municipalityCode']
-        : null;
-    $legendSpacing = $raw['legendSpacing'] ?? $defaults['legendSpacing'];
-    $basemap = $raw['basemap'] ?? $defaults['basemap'];
-    $paperSize = $raw['paperSize'] ?? $defaults['paperSize'];
-    $orientation = $raw['orientation'] ?? $defaults['orientation'];
-
-    return [
-        'title' => sanitize_export_text($raw['title'] ?? $defaults['title']),
-        'author' => sanitize_export_text($raw['author'] ?? $defaults['author']),
-        'technicalResponsible' => sanitize_export_text($raw['technicalResponsible'] ?? $defaults['technicalResponsible']),
-        'legendPosition' => $legendPosition,
-        'legendRect' => normalize_export_legend_rect($raw['legendRect'] ?? null, $legendPosition),
-        'legendColumns' => clamp_export_int($raw['legendColumns'] ?? null, 1, 6, $defaults['legendColumns']),
-        'legendFontSizePx' => clamp_export_int($raw['legendFontSizePx'] ?? null, 8, 18, $defaults['legendFontSizePx']),
-        'legendSpacing' => is_string($legendSpacing) && in_array($legendSpacing, ['compact', 'normal', 'wide'], true)
-            ? $legendSpacing
-            : $defaults['legendSpacing'],
-        'hiddenCategoryIds' => as_export_string_array($raw['hiddenCategoryIds'] ?? null, ELEMENTS_PER_MAP),
-        'hiddenElementIds' => as_export_string_array($raw['hiddenElementIds'] ?? null, ELEMENTS_PER_MAP),
-        'showTags' => is_bool($raw['showTags'] ?? null) ? $raw['showTags'] : $defaults['showTags'],
-        'basemap' => is_string($basemap) && in_array($basemap, ['carto', 'osm', 'satellite', 'offline'], true)
-            ? $basemap
-            : $defaults['basemap'],
-        'locatorCount' => normalize_export_locator_count($raw['locatorCount'] ?? null),
-        'stateCode' => $stateCode,
-        'municipalityCode' => $municipalityCode,
-        'stateColor' => normalize_export_hex_color($raw['stateColor'] ?? null, $defaults['stateColor']),
-        'municipalityColor' => normalize_export_hex_color($raw['municipalityColor'] ?? null, $defaults['municipalityColor']),
-        'showStateInLegend' => is_bool($raw['showStateInLegend'] ?? null) ? $raw['showStateInLegend'] : $defaults['showStateInLegend'],
-        'showMunicipalityInLegend' => is_bool($raw['showMunicipalityInLegend'] ?? null) ? $raw['showMunicipalityInLegend'] : $defaults['showMunicipalityInLegend'],
-        'showMunicipalMesh' => is_bool($raw['showMunicipalMesh'] ?? null) ? $raw['showMunicipalMesh'] : $defaults['showMunicipalMesh'],
-        'paperSize' => is_string($paperSize) && in_array($paperSize, ['A4', 'A3', 'Letter'], true)
-            ? $paperSize
-            : $defaults['paperSize'],
-        'orientation' => is_string($orientation) && in_array($orientation, ['landscape', 'portrait'], true)
-            ? $orientation
-            : $defaults['orientation'],
-        'dpi' => clamp_export_int($raw['dpi'] ?? null, 72, 600, $defaults['dpi']),
-    ];
-}
-
-/**
- * @return array<string, mixed>
- */
-function validate_export_settings_payload(mixed $settings): array
-{
-    if (!is_array($settings)) {
-        auth_fail('validation_error', 'Validation failed.', 400, [
-            'export_settings' => 'export_settings must be an object.',
-        ]);
-    }
-    if (array_is_list($settings)) {
-        auth_fail('validation_error', 'Validation failed.', 400, [
-            'export_settings' => 'export_settings must be an object.',
-        ]);
-    }
-
-    $normalized = normalize_export_settings($settings);
-    $encoded = json_encode($normalized, JSON_THROW_ON_ERROR);
-    if (strlen($encoded) > MAX_EXPORT_SETTINGS_BYTES) {
-        auth_fail('validation_error', 'Validation failed.', 400, [
-            'export_settings' => 'export_settings exceeds maximum size.',
-        ]);
-    }
-
-    return $normalized;
-}
-
 function format_map_record(array $row): array
 {
     return [
@@ -275,7 +26,6 @@ function format_map_record(array $row): array
         'moderated_at' => $row['moderated_at'],
         'moderation_reason' => $row['moderation_reason'],
         'version' => (int) $row['version'],
-        'export_settings' => decode_export_settings_column($row['export_settings'] ?? '{}'),
         'created_at' => (string) $row['created_at'],
         'updated_at' => (string) $row['updated_at'],
     ];
@@ -501,40 +251,6 @@ function maps_update(array $user, array $input, bool $forceVersion = false): arr
     }
     assert_map_owner($user, $map);
 
-    $geometryKeys = ['name', 'description', 'center_lat', 'center_lng', 'zoom'];
-    $hasGeometryFields = false;
-    foreach ($geometryKeys as $key) {
-        if (array_key_exists($key, $input)) {
-            $hasGeometryFields = true;
-            break;
-        }
-    }
-
-    $allowedSettingsOnlyKeys = ['id', 'export_settings', 'client_mutation_id'];
-    $isSettingsOnly = array_key_exists('export_settings', $input)
-        && !$hasGeometryFields
-        && array_diff(array_keys($input), $allowedSettingsOnlyKeys) === [];
-
-    if ($isSettingsOnly) {
-        $settings = validate_export_settings_payload($input['export_settings']);
-        $stmt = db()->prepare(
-            'UPDATE maps SET export_settings = :export_settings::jsonb, updated_at = NOW()
-             WHERE id = :id RETURNING *'
-        );
-        $stmt->execute([
-            'id' => $mapId,
-            'export_settings' => json_encode($settings, JSON_THROW_ON_ERROR),
-        ]);
-        $updated = format_map_record($stmt->fetch(PDO::FETCH_ASSOC));
-        $result = ['success' => true, 'map' => $updated];
-
-        if ($clientMutationId !== '') {
-            client_mutation_store($user['id'], $clientMutationId, 'map', $mapId, $result);
-        }
-
-        return $result;
-    }
-
     $baseVersion = $input['base_version'] ?? null;
     if (!$forceVersion && $baseVersion === null) {
         auth_fail('validation_error', 'Validation failed.', 400, [
@@ -582,12 +298,6 @@ function maps_update(array $user, array $input, bool $forceVersion = false): arr
         }
     }
 
-    if (array_key_exists('export_settings', $input)) {
-        $settings = validate_export_settings_payload($input['export_settings']);
-        $fields[] = 'export_settings = :export_settings::jsonb';
-        $params['export_settings'] = json_encode($settings, JSON_THROW_ON_ERROR);
-    }
-
     if ($fields === []) {
         return ['success' => true, 'map' => format_map_record($map)];
     }
@@ -615,7 +325,7 @@ function map_element_count(string $mapId): int
     return (int) $stmt->fetchColumn();
 }
 
-function maps_publish(array $user, array $input): array
+function maps_publish(array $user, array $input, bool $forceVersion = false): array
 {
     $mapId = (string) ($input['id'] ?? '');
     $confirmEmpty = !empty($input['confirm_empty']);
@@ -637,6 +347,20 @@ function maps_publish(array $user, array $input): array
         auth_fail('not_found', 'Map not found.', 404);
     }
     assert_map_owner($user, $map, false);
+
+    $baseVersion = $input['base_version'] ?? null;
+    if (!$forceVersion && $baseVersion === null) {
+        auth_fail('validation_error', 'Validation failed.', 400, [
+            'base_version' => 'base_version is required.',
+        ]);
+    }
+    if (!$forceVersion && (int) $baseVersion !== (int) $map['version']) {
+        json_conflict(
+            'Map version conflict.',
+            ['id' => $mapId, 'base_version' => (int) $baseVersion, 'op' => 'publish'],
+            format_map_record($map)
+        );
+    }
 
     $name = trim((string) $map['name']);
     if ($name === '') {
@@ -687,7 +411,7 @@ function maps_publish(array $user, array $input): array
     return $result;
 }
 
-function maps_unpublish(array $user, array $input): array
+function maps_unpublish(array $user, array $input, bool $forceVersion = false): array
 {
     $mapId = (string) ($input['id'] ?? '');
     $clientMutationId = trim((string) ($input['client_mutation_id'] ?? ''));
@@ -708,6 +432,20 @@ function maps_unpublish(array $user, array $input): array
         auth_fail('not_found', 'Map not found.', 404);
     }
     assert_map_owner($user, $map, false);
+
+    $baseVersion = $input['base_version'] ?? null;
+    if (!$forceVersion && $baseVersion === null) {
+        auth_fail('validation_error', 'Validation failed.', 400, [
+            'base_version' => 'base_version is required.',
+        ]);
+    }
+    if (!$forceVersion && (int) $baseVersion !== (int) $map['version']) {
+        json_conflict(
+            'Map version conflict.',
+            ['id' => $mapId, 'base_version' => (int) $baseVersion, 'op' => 'unpublish'],
+            format_map_record($map)
+        );
+    }
 
     if (!(bool) $map['is_published']) {
         $result = ['success' => true, 'map' => format_map_record($map)];

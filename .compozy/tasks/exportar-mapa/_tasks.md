@@ -9,23 +9,13 @@ graph:
       file: task_02.md
     - id: task_03
       file: task_03.md
-    - id: task_04
-      file: task_04.md
-    - id: task_05
-      file: task_05.md
   edges:
     - from: task_01
       to: task_02
     - from: task_02
       to: task_03
-    - from: task_03
-      to: task_04
-    - from: task_03
-      to: task_05
-    - from: task_04
-      to: task_05
 ---
 
 # Exportar Mapa Task List
 
-Robust vertical slices for owner-only PNG composition export: persistence contract, editor entry, live composition preview, Brazil locators, and PNG delivery.
+Client-side cartographic export composition in the owner map editor: pure export library and generation pipeline, dedicated Leaflet composition surface (main map, legend, location insets, chrome), then shell/controls wired into `MapEditor` with owner-only gates, ephemeral session, and full mobile parity.

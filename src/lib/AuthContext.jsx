@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { api, ApiError } from '@/api/apiClient';
 import { SyncEngine } from '@/lib/sync/SyncEngine';
+import { OfflineStore } from '@/lib/offline/OfflineStore';
 import { orchestrateLogout } from '@/lib/offline/logoutFlow';
 import { clearOfflineAccount } from '@/lib/offline/offlineApi';
 import { isOnline, onConnectivityChange } from '@/lib/offline/connectivity';
@@ -88,6 +89,8 @@ export const AuthProvider = ({ children }) => {
       setUser(currentUser);
       setIsAuthenticated(true);
       api.offline.setUserId(currentUser.id);
+      const store = new OfflineStore(currentUser.id);
+      await store.bindAccount();
     } catch (error) {
       setUser(null);
       setIsAuthenticated(false);
@@ -143,6 +146,8 @@ export const AuthProvider = ({ children }) => {
     setUser(loggedInUser);
     setIsAuthenticated(true);
     api.offline.setUserId(loggedInUser.id);
+    const store = new OfflineStore(loggedInUser.id);
+    await store.bindAccount();
     setAuthError(null);
     return loggedInUser;
   };
@@ -189,31 +194,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   const confirmLogoutDiscard = async () => {
-    const userId = user?.id;
-    if (userId) {
-      await clearOfflineAccount();
-    }
-    try {
-      await api.auth.logout();
-    } catch (err) {
-      if (!(err instanceof ApiError && err.status === 401)) {
-        throw err;
-      }
-    }
-    setUser(null);
-    setIsAuthenticated(false);
-    api.offline.setUserId(null);
-    syncEngineRef.current = null;
-    syncProgressUnsubRef.current?.();
-    syncProgressUnsubRef.current = null;
-    setSyncState({
-      flushing: false,
-      progress: { completed: 0, total: 0 },
-      lastResult: null,
-      error: null,
-    });
-    setLogoutState(null);
-    return { success: true, discarded: true };
+    const result = await logout({ discardConfirmed: true });
+    return { success: true, discarded: true, ...result };
   };
 
   const refreshUser = async () => {
