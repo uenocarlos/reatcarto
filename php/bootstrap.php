@@ -17,6 +17,7 @@ require_once __DIR__ . '/lib/ClientMutation.php';
 require_once __DIR__ . '/lib/GeoJson.php';
 require_once __DIR__ . '/lib/Maps/MapService.php';
 require_once __DIR__ . '/lib/Elements/ElementService.php';
+require_once __DIR__ . '/lib/Elements/ElementCategoryService.php';
 require_once __DIR__ . '/lib/Photos/PhotoService.php';
 require_once __DIR__ . '/lib/Public/PublicService.php';
 require_once __DIR__ . '/lib/Sync/SyncService.php';
@@ -31,6 +32,11 @@ function app_config(): array
     global $CONFIG;
 
     return $CONFIG;
+}
+
+function email_verification_required(): bool
+{
+    return (app_config()['require_email_verification'] ?? false) === true;
 }
 
 function db(): PDO

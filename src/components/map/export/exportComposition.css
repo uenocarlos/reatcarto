@@ -11,6 +11,7 @@
   overflow: hidden;
   box-sizing: border-box;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  --export-location-inset-size: 162px;
 }
 
 .export-composition--portrait {
@@ -73,6 +74,10 @@
 .export-composition__main-map-region--with-insets-side {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+.export-composition__main-map-region--with-insets-side .export-location-insets--side {
+  justify-content: center;
 }
 
 /* The inside legend is anchored to this cell, never to the adjacent inset maps. */
@@ -241,9 +246,33 @@
 }
 
 .export-scale-bar--compact .export-scale-bar__plugin .leaflet-control-graphicscale-inner {
-  margin-top: 16px !important;
+  margin-top: 10px !important;
   transform: scale(0.78);
   transform-origin: left bottom;
+}
+
+.export-map-chrome--compact .export-map-control--anchor-right {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.export-map-chrome--compact .export-map-control--north.export-map-control--anchor-right {
+  margin-right: calc((var(--export-compact-scale-width, 90px) - var(--export-compact-north-width, 42px)) / 2 - 6px);
+}
+
+.export-map-chrome--compact .export-scale-bar--compact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.export-map-chrome--compact .export-scale-bar--compact .export-scale-bar__ticks,
+.export-map-chrome--compact .export-scale-bar--compact .export-scale-bar__segments {
+  margin-left: auto;
+}
+
+.export-map-chrome--compact .export-scale-bar--compact .export-scale-bar__plugin .leaflet-control-graphicscale-inner {
+  transform-origin: right bottom;
 }
 
 .export-scale-bar__segments {
@@ -371,7 +400,8 @@
 }
 
 /* AutoGraticule v2: tipografia do legado e latitude horizontal na borda esquerda. */
-.export-main-map__leaflet .leaflet-grid-label {
+.export-main-map__leaflet .leaflet-grid-label,
+.export-location-inset__map .leaflet-grid-label {
   font: 12px Georgia, serif;
   color: #333;
   font-weight: bold;
@@ -379,15 +409,26 @@
   pointer-events: none;
 }
 
-.export-main-map__leaflet .leaflet-grid-label .gridlabel-vert {
+.export-main-map__leaflet .leaflet-grid-label .gridlabel-vert,
+.export-location-inset__map .leaflet-grid-label .gridlabel-vert {
   margin-left: 8px;
   margin-top: -4px;
   transform: none;
   -webkit-transform: none;
 }
 
-.export-main-map__leaflet .leaflet-grid-label .gridlabel-horiz {
+.export-main-map__leaflet .leaflet-grid-label .gridlabel-horiz,
+.export-location-inset__map .leaflet-grid-label .gridlabel-horiz {
   transform: translate(-50%, 2px);
+}
+
+.export-location-inset__map .leaflet-grid-label {
+  font-size: 9px;
+}
+
+.export-location-inset__map .leaflet-grid-label .gridlabel-vert {
+  margin-left: 4px;
+  margin-top: -2px;
 }
 
 .export-collision-warning {
@@ -435,6 +476,7 @@
   pointer-events: auto;
   touch-action: none;
   border: 2px solid #f97316;
+  overflow: visible;
 }
 
 .export-legend--right {
@@ -634,25 +676,25 @@
 
 .export-legend__rh {
   position: absolute;
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   background: #f97316;
   border: 1px solid #fff;
-  border-radius: 1px;
+  border-radius: 2px;
   padding: 0;
   z-index: 2;
   box-sizing: border-box;
   touch-action: none;
 }
 
-.export-legend__rh--n { top: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
-.export-legend__rh--s { bottom: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
-.export-legend__rh--e { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
-.export-legend__rh--w { left: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
-.export-legend__rh--ne { top: -5px; right: -5px; cursor: nesw-resize; }
-.export-legend__rh--nw { top: -5px; left: -5px; cursor: nwse-resize; }
-.export-legend__rh--se { bottom: -5px; right: -5px; cursor: nwse-resize; }
-.export-legend__rh--sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.export-legend__rh--n { top: -7px; left: 50%; margin-left: -7px; cursor: ns-resize; }
+.export-legend__rh--s { bottom: -7px; left: 50%; margin-left: -7px; cursor: ns-resize; }
+.export-legend__rh--e { right: -7px; top: 50%; margin-top: -7px; cursor: ew-resize; }
+.export-legend__rh--w { left: -7px; top: 50%; margin-top: -7px; cursor: ew-resize; }
+.export-legend__rh--ne { top: -7px; right: -7px; cursor: nesw-resize; }
+.export-legend__rh--nw { top: -7px; left: -7px; cursor: nwse-resize; }
+.export-legend__rh--se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.export-legend__rh--sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
 
 .export-legend__metric-control {
   display: flex;
@@ -671,8 +713,8 @@
   position: relative;
   z-index: 2;
   flex-direction: column;
-  width: 136px;
-  min-width: 136px;
+  width: var(--export-location-inset-size);
+  min-width: var(--export-location-inset-size);
   pointer-events: auto;
   align-self: stretch;
 }
@@ -698,8 +740,8 @@
 
 .export-location-inset__frame {
   border: 2px solid #f97316;
-  width: 136px;
-  height: 136px;
+  width: var(--export-location-inset-size);
+  height: var(--export-location-inset-size);
   aspect-ratio: 1;
   overflow: hidden;
   background: #e8e8e8;
@@ -716,7 +758,7 @@
   font-size: 10px;
   margin-bottom: 0;
   font-weight: 600;
-  max-width: 136px;
+  max-width: var(--export-location-inset-size);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -749,6 +791,7 @@
 .export-institutional-footer {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 8px 12px 12px;
   border-top: 1px solid #ddd;
@@ -756,10 +799,21 @@
   line-height: 1.35;
 }
 
+.export-institutional-footer__lines {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .export-institutional-footer__logo {
   width: 48px;
   height: auto;
   flex-shrink: 0;
+  margin-left: auto;
+}
+
+.export-institutional-footer__line--brand {
+  color: #1d4ed8;
+  font-weight: 600;
 }
 
 .export-composition__selection-warning,
@@ -801,15 +855,19 @@
     height: 320px;
   }
 
+  .export-composition {
+    --export-location-inset-size: 128px;
+  }
+
   .export-location-insets--side,
   .export-location-inset__frame,
   .export-location-inset__label {
-    width: 112px;
-    min-width: 112px;
-    max-width: 112px;
+    width: var(--export-location-inset-size);
+    min-width: var(--export-location-inset-size);
+    max-width: var(--export-location-inset-size);
   }
 
   .export-location-inset__frame {
-    height: 112px;
+    height: var(--export-location-inset-size);
   }
 }

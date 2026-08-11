@@ -1,58 +1,18 @@
-import React, { useEffect, useCallback } from 'react';
-import { MapContainer, TileLayer, useMap } from 'react-leaflet';
+import React, { useCallback } from 'react';
+import { MapContainer, TileLayer } from 'react-leaflet';
 import { resolveBasemapTileUrl } from '@/lib/export';
 import ExportElementLayers from './ExportElementLayers';
 import ExportLocationOverlay from './ExportLocationOverlay';
+import DecorativeFrame from './DecorativeFrame';
 import {
   GraticuleOverlay,
   MapChromeOverlay,
+  MapInvalidateSize,
   CollisionMonitor,
   MapViewSync,
   TileReadyTracker,
 } from './MapChrome';
-import DecorativeFrame from './DecorativeFrame';
 import './exportComposition.css';
-
-/** Leaflet measures the container once; dialog animations leave it at 0×0 until resize. */
-function InvalidateSizeOnMount() {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map || typeof map.invalidateSize !== 'function') return undefined;
-
-    const refresh = () => {
-      try {
-        map.invalidateSize({ animate: false });
-      } catch {
-        /* mock or unmounted map */
-      }
-    };
-
-    refresh();
-    const frame = requestAnimationFrame(refresh);
-    const t1 = window.setTimeout(refresh, 50);
-    const t2 = window.setTimeout(refresh, 250);
-    const t3 = window.setTimeout(refresh, 600);
-
-    const container = typeof map.getContainer === 'function' ? map.getContainer() : null;
-    const parent = container?.parentElement;
-    let observer;
-    if (typeof ResizeObserver !== 'undefined' && parent) {
-      observer = new ResizeObserver(() => refresh());
-      observer.observe(parent);
-    }
-
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-      window.clearTimeout(t3);
-      observer?.disconnect();
-    };
-  }, [map]);
-
-  return null;
-}
 
 export default function ExportMainMap({
   center,
@@ -101,7 +61,7 @@ export default function ExportMainMap({
             className="export-main-map__leaflet"
             data-testid="export-main-map-leaflet"
           >
-            <InvalidateSizeOnMount />
+            <MapInvalidateSize />
             <TileReadyTracker basemap={basemap} onReadyChange={handleTiles} />
             {onViewChange ? <MapViewSync onViewChange={onViewChange} /> : null}
             <TileLayer url={tileUrl} crossOrigin="anonymous" />

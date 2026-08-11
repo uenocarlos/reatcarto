@@ -1,7 +1,9 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   assertExportTitle,
   buildLegendItems,
+  deriveLegendInsideMetrics,
+  fitLegendInsideForItems,
   truncateTitleForPreview,
   validateLocationSelection,
 } from '@/lib/export';
@@ -119,6 +121,7 @@ export default function CompositionPreview({
       location: locationLegend,
       order: session.legendItemOrder,
       groupByTopic: session.legendGroupByTopic,
+      elementCategories: session.elementCategories,
     }),
     [
       session.elements,
@@ -126,6 +129,7 @@ export default function CompositionPreview({
       locationLegend,
       session.legendItemOrder,
       session.legendGroupByTopic,
+      session.elementCategories,
     ],
   );
 
@@ -158,6 +162,27 @@ export default function CompositionPreview({
   const handleCollisionChange = useCallback((nextCollisions) => {
     setCollisions(nextCollisions);
   }, []);
+
+  useEffect(() => {
+    if (session.legendPosition !== 'inside' || !onLegendInsideChange || legendItems.length === 0) return;
+    const needed = deriveLegendInsideMetrics(legendItems, {
+      columns: session.legendColumns,
+      fontPx: session.legendFontPx,
+    });
+    const current = session.legendInside;
+    if (needed.hPct <= current.hPct + 0.5 && needed.wPct <= current.wPct + 0.5) return;
+    onLegendInsideChange(fitLegendInsideForItems(current, legendItems, {
+      columns: session.legendColumns,
+      fontPx: session.legendFontPx,
+    }));
+  }, [
+    legendItems,
+    onLegendInsideChange,
+    session.legendColumns,
+    session.legendFontPx,
+    session.legendInside,
+    session.legendPosition,
+  ]);
 
   return (
     <div

@@ -1,7 +1,7 @@
+import { buildCategoryIndex } from '../elementCategories.js';
 import {
   buildTypeGroups,
   categoryBucket,
-  CATEGORY_ORDER,
 } from './layerGrouping.js';
 
 /**
@@ -13,7 +13,6 @@ export const LEGEND_TOPIC_DEFS = Object.freeze([
   { id: 'terra', label: 'Terra' },
   { id: 'agua', label: 'Agua' },
   { id: 'conflito', label: 'Conflito' },
-  { id: 'terra_agua', label: 'Terra e Agua' },
   { id: 'outros', label: 'Outros' },
 ]);
 
@@ -47,8 +46,9 @@ export function applyLegendItemOrder(items, order) {
  * @param {Array<Record<string, unknown>>} items
  * @param {boolean} groupByTopic
  */
-export function withLegendTopics(items, groupByTopic) {
+export function withLegendTopics(items, groupByTopic, elementCategories = []) {
   if (!groupByTopic) return items;
+  const index = buildCategoryIndex(elementCategories);
   const labels = Object.fromEntries(LEGEND_TOPIC_DEFS.map((topic) => [topic.id, topic.label]));
   const result = [];
   const seenTopic = new Set();
@@ -63,7 +63,7 @@ export function withLegendTopics(items, groupByTopic) {
       seenTopic.add(topicId);
       result.push({
         id: `topic-${topicId}`,
-        label: labels[topicId] || topicId,
+        label: index.labelFor(topicId) || labels[topicId] || topicId,
         symbolKind: 'topic',
         style: {},
         source: 'topic',
@@ -93,15 +93,22 @@ export function withLegendTopics(items, groupByTopic) {
  */
 export function buildLegendItems(input = {}) {
   const elements = Array.isArray(input.elements) ? input.elements : [];
+  const elementCategories = Array.isArray(input.elementCategories) ? input.elementCategories : [];
   const hiddenIds = input.hiddenIds instanceof Set
     ? input.hiddenIds
     : new Set(Array.isArray(input.hiddenIds) ? input.hiddenIds : []);
 
   const visibleElements = elements.filter((element) => !hiddenIds.has(String(element.id ?? '')));
   const grouped = buildTypeGroups(visibleElements);
+  const categoryIndex = buildCategoryIndex(elementCategories);
+  const categoryOrder = [...categoryIndex.order];
+  for (const element of visibleElements) {
+    const category = categoryBucket(element?.element_category);
+    if (!categoryOrder.includes(category)) categoryOrder.push(category);
+  }
   const items = [];
 
-  for (const category of CATEGORY_ORDER) {
+  for (const category of categoryOrder) {
     for (const group of Object.values(grouped).filter(Array.isArray).flat()) {
       if (group.category !== category) continue;
       const hintSuffix = group.hasNameCollision && group.hints?.length
@@ -154,7 +161,7 @@ export function buildLegendItems(input = {}) {
 
   let working = items;
   if (input.groupByTopic && !(Array.isArray(input.order) && input.order.length)) {
-    const topicRank = Object.fromEntries(LEGEND_TOPIC_DEFS.map((topic, index) => [topic.id, index]));
+    const topicRank = Object.fromEntries(categoryOrder.map((category, index) => [category, index]));
     const elementItems = working.filter((item) => item.source === 'element');
     const locationItems = working.filter((item) => item.source === 'location');
     elementItems.sort((a, b) => {
@@ -181,7 +188,7 @@ export function buildLegendItems(input = {}) {
   }
 
   const ordered = applyLegendItemOrder(working, input.order);
-  return withLegendTopics(ordered, Boolean(input.groupByTopic));
+  return withLegendTopics(ordered, Boolean(input.groupByTopic), elementCategories);
 }
 
 export { categoryBucket };

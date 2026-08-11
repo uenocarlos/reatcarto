@@ -1,9 +1,9 @@
-import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { Geolocation } from '@capacitor/geolocation';
 
@@ -12,7 +12,15 @@ import MapToolbar from '@/components/map/MapToolbar';
 import StylePanel from '@/components/map/StylePanel';
 import ElementContextMenu from '@/components/map/ElementContextMenu';
 import GpsTracker from '@/components/map/GpsTracker';
+import CitySearchControl from '@/components/map/CitySearchControl';
 import { useAuth } from '@/lib/AuthContext';
+import { loadMunicipalitySearchIndex } from '@/lib/geocodeCities';
+import {
+  createCategoryFromLabel,
+  loadLocalElementCategories,
+  mergeElementCategories,
+  saveLocalElementCategories,
+} from '@/lib/elementCategoryStore';
 import { Badge } from '@/components/ui/badge';
 import ConflictResolutionModal from '@/components/map/ConflictResolutionModal';
 import { isOnline } from '@/lib/offline/connectivity';
@@ -31,6 +39,7 @@ import ExportEntry from '@/components/map/ExportEntry';
 import { createEditorExportSnapshot } from '@/lib/export/session';
 
 const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
+const MemorialDialog = lazy(() => import('@/components/map/MemorialDialog'));
 
 export default function MapEditor() {
   const { mapId } = useParams();
@@ -56,6 +65,7 @@ export default function MapEditor() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSessionKey, setExportSessionKey] = useState(0);
   const [exportSnapshot, setExportSnapshot] = useState(null);
+  const [memorialOpen, setMemorialOpen] = useState(false);
   const historySilentRef = useRef(false);
   const skipOpenEditorRef = useRef(false);
   const pendingHistoryRef = useRef(null);
@@ -64,7 +74,12 @@ export default function MapEditor() {
   const elementsRef = useRef([]);
   const historyRef = useRef(history);
   const historyBusyRef = useRef(false);
-  const { getSyncEngine, isAuthenticated } = useAuth();
+  const mapVersionRef = useRef(null);
+  const savedViewRef = useRef(null);
+  const pendingViewRef = useRef(null);
+  const viewSaveTimerRef = useRef(null);
+  const viewSaveInFlightRef = useRef(false);
+  const { getSyncEngine, isAuthenticated, user, refreshUser } = useAuth();
 
   useEffect(() => {
     historyRef.current = history;
@@ -108,6 +123,24 @@ export default function MapEditor() {
     queryKey: ['elements', mapId],
     queryFn: () => api.entities.MapElement.filter({ map_id: mapId }),
   });
+
+  useEffect(() => {
+    if (!mapData) return;
+    mapVersionRef.current = mapData.version;
+    savedViewRef.current = {
+      lat: Number(mapData.center_lat),
+      lng: Number(mapData.center_lng),
+      zoom: Number(mapData.zoom),
+    };
+  }, [mapData?.id, mapData?.version, mapData?.center_lat, mapData?.center_lng, mapData?.zoom]);
+
+  // Pré-carrega índice local de municípios (busca do header)
+  useEffect(() => {
+    if (!mapData) return undefined;
+    const controller = new AbortController();
+    void loadMunicipalitySearchIndex({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [mapData?.id]);
 
   useEffect(() => {
     elementsRef.current = elements;
@@ -663,8 +696,174 @@ export default function MapEditor() {
     setEditingElement(null);
   };
 
+  const viewsAlmostEqual = useCallback((a, b) => {
+    if (!a || !b) return false;
+    return (
+      Math.abs(a.lat - b.lat) < 1e-6 &&
+      Math.abs(a.lng - b.lng) < 1e-6 &&
+      Math.round(a.zoom) === Math.round(b.zoom)
+    );
+  }, []);
+
+  const persistMapView = useCallback(
+    async (view, { force = false } = {}) => {
+      if (!mapId || !view) return;
+      if (!isOnline()) return;
+      const next = {
+        lat: Number(view.lat),
+        lng: Number(view.lng),
+        zoom: Math.round(Number(view.zoom)),
+      };
+      if (!Number.isFinite(next.lat) || !Number.isFinite(next.lng) || !Number.isFinite(next.zoom)) {
+        return;
+      }
+      if (!force && viewsAlmostEqual(savedViewRef.current, next)) {
+        pendingViewRef.current = null;
+        return;
+      }
+      if (viewSaveInFlightRef.current) {
+        pendingViewRef.current = next;
+        return;
+      }
+
+      viewSaveInFlightRef.current = true;
+      pendingViewRef.current = null;
+      try {
+        const updated = await api.entities.Map.update(mapId, {
+          center_lat: next.lat,
+          center_lng: next.lng,
+          zoom: next.zoom,
+          base_version: mapVersionRef.current,
+        });
+        mapVersionRef.current = updated.version;
+        savedViewRef.current = {
+          lat: Number(updated.center_lat),
+          lng: Number(updated.center_lng),
+          zoom: Number(updated.zoom),
+        };
+        queryClient.setQueryData(['map', mapId], (old) => {
+          if (Array.isArray(old)) {
+            return old.map((m) => (String(m.id) === String(mapId) ? { ...m, ...updated } : m));
+          }
+          return [{ ...updated }];
+        });
+      } catch (err) {
+        // Conflito de versão: recarrega metadados e tenta de novo uma vez
+        const code = err?.code;
+        if (code === 'conflict' || err?.status === 409) {
+          try {
+            const fresh = await api.entities.Map.filter({ id: mapId });
+            const map = fresh?.[0];
+            if (map) {
+              mapVersionRef.current = map.version;
+              queryClient.setQueryData(['map', mapId], fresh);
+              const retried = await api.entities.Map.update(mapId, {
+                center_lat: next.lat,
+                center_lng: next.lng,
+                zoom: next.zoom,
+                base_version: map.version,
+              });
+              mapVersionRef.current = retried.version;
+              savedViewRef.current = {
+                lat: Number(retried.center_lat),
+                lng: Number(retried.center_lng),
+                zoom: Number(retried.zoom),
+              };
+              queryClient.setQueryData(['map', mapId], [retried]);
+            }
+          } catch {
+            /* silencioso — próxima interação tenta de novo */
+          }
+        }
+      } finally {
+        viewSaveInFlightRef.current = false;
+        if (pendingViewRef.current) {
+          const queued = pendingViewRef.current;
+          pendingViewRef.current = null;
+          void persistMapView(queued);
+        }
+      }
+    },
+    [mapId, queryClient, viewsAlmostEqual]
+  );
+
+  const handleMapViewChange = useCallback(
+    (view) => {
+      pendingViewRef.current = {
+        lat: Number(view.lat),
+        lng: Number(view.lng),
+        zoom: Math.round(Number(view.zoom)),
+      };
+      if (viewSaveTimerRef.current) clearTimeout(viewSaveTimerRef.current);
+      viewSaveTimerRef.current = setTimeout(() => {
+        const pending = pendingViewRef.current;
+        if (pending) void persistMapView(pending);
+      }, 700);
+    },
+    [persistMapView]
+  );
+
+  // Flush da vista ao sair do editor / trocar de mapa
+  useEffect(() => {
+    return () => {
+      if (viewSaveTimerRef.current) {
+        clearTimeout(viewSaveTimerRef.current);
+        viewSaveTimerRef.current = null;
+      }
+      const pending = pendingViewRef.current;
+      if (pending && isOnline()) {
+        // fire-and-forget: manter posição ao reabrir
+        void api.entities.Map.update(mapId, {
+          center_lat: pending.lat,
+          center_lng: pending.lng,
+          zoom: pending.zoom,
+          base_version: mapVersionRef.current,
+        }).catch(() => {});
+      }
+    };
+  }, [mapId]);
+
   const center = mapData ? [mapData.center_lat || -32.035, mapData.center_lng || -52.1] : [-32.035, -52.1];
   const zoom = mapData?.zoom || 13;
+
+  const elementCategories = useMemo(
+    () => mergeElementCategories(user?.element_categories ?? [], user?.id, elements),
+    [user?.element_categories, user?.id, elements],
+  );
+
+  const handleAddElementCategory = useCallback(async (label) => {
+    const trimmed = String(label ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Informe um nome para o tipo');
+    }
+
+    const existing = elementCategories.find(
+      (category) => category.label.localeCompare(trimmed, 'pt-BR', { sensitivity: 'accent' }) === 0,
+    );
+    if (existing) return existing;
+
+    const draft = createCategoryFromLabel(trimmed, elementCategories);
+    const local = loadLocalElementCategories(user?.id);
+    saveLocalElementCategories(user?.id, [...local, draft]);
+
+    if (isOnline()) {
+      try {
+        const saved = await api.auth.addElementCategory(trimmed);
+        const normalized = saved?.id
+          ? { id: saved.id, label: saved.label || trimmed, builtin: false }
+          : draft;
+        const nextLocal = loadLocalElementCategories(user?.id).filter((category) => category.id !== draft.id);
+        saveLocalElementCategories(user?.id, nextLocal);
+        if (refreshUser) await refreshUser();
+        return normalized;
+      } catch (error) {
+        if (refreshUser) await refreshUser();
+        return draft;
+      }
+    }
+
+    return draft;
+  }, [elementCategories, refreshUser, user?.id]);
 
   const buildExportSnapshot = useCallback(() => {
     const mapCenter = mapInstance?.getCenter?.();
@@ -678,8 +877,9 @@ export default function MapEditor() {
       hiddenIds,
       basemap,
       elements,
+      elementCategories,
     });
-  }, [mapInstance, mapData?.name, center, zoom, hiddenIds, basemap, elements]);
+  }, [mapInstance, mapData?.name, center, zoom, hiddenIds, basemap, elements, elementCategories]);
 
   const handleOpenExport = useCallback(() => {
     if (exportOpen) return;
@@ -703,18 +903,18 @@ export default function MapEditor() {
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden overscroll-none">
       {/* Header */}
-      <div className="bg-card border-b px-4 py-3 flex items-center justify-between shadow-sm z-10 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => navigate('/')}>
+      <div className="bg-card border-b px-4 py-3 grid grid-cols-[1fr_minmax(12rem,28rem)_1fr] items-center gap-3 shadow-sm z-10 flex-shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => navigate('/')}>
             <ArrowLeft className="w-5 h-5" />
           </Button>
           <img 
             src="/logo.png" 
             alt="Logo" 
-            className="w-8 h-8 object-contain"
+            className="w-8 h-8 object-contain shrink-0"
           />
-          <div>
-            <h1 className="font-bold text-base leading-none flex items-center gap-2">
+          <div className="min-w-0">
+            <h1 className="font-bold text-base leading-none flex items-center gap-2 truncate">
               {mapData?.name || 'Carregando...'}
               {pendingCount > 0 && <Badge variant="secondary">{pendingCount} pendente(s)</Badge>}
               {!isOnline() && <Badge variant="outline">Offline</Badge>}
@@ -722,22 +922,46 @@ export default function MapEditor() {
             <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider font-semibold">Gerador de Mapas</p>
           </div>
         </div>
-        {mapData ? (
-          <ExportEntry
-            onOpen={handleOpenExport}
-            disabled={!isAuthenticated || mapAuthError}
-            disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
-          />
-        ) : null}
+
+        <div className="flex justify-center min-w-0">
+          {mapData && !exportOpen ? (
+            <CitySearchControl map={mapInstance} enabled className="w-full" />
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 min-w-0">
+          {mapData ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => setMemorialOpen(true)}
+                title="Gerar memorial descritivo"
+              >
+                <FileText className="w-4 h-4" />
+                <span className="hidden sm:inline">Memorial</span>
+              </Button>
+              <ExportEntry
+                onOpen={handleOpenExport}
+                disabled={!isAuthenticated || mapAuthError}
+                disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+              />
+            </>
+          ) : null}
+        </div>
       </div>
 
       {/* Toolbar */}
-      <MapToolbar 
-        activeTool={activeTool} 
-        onToolChange={setActiveTool} 
-        onDrawingMode={setDrawingMode} 
-        disabled={isEditingNew}
-      />
+      {!exportOpen ? (
+        <MapToolbar
+          activeTool={activeTool}
+          onToolChange={setActiveTool}
+          onDrawingMode={setDrawingMode}
+          disabled={isEditingNew}
+        />
+      ) : null}
 
       {/* Drawing mode indicator */}
       {drawingMode && activeTool !== 'select' && (
@@ -764,31 +988,39 @@ export default function MapEditor() {
 
       {/* Map */}
       <div className="flex-1 relative" style={{ minHeight: 0 }}>
-        <LeafletMap
-          center={center}
-          zoom={zoom}
-          elements={elements}
-          otherElements={otherElements}
-          showOtherElements={showOtherElements}
-          activeTool={activeTool}
-          drawingMode={drawingMode}
-          onNewElement={handleNewElement}
-          onElementLongPress={handleElementLongPress}
-          gpsPoints={gpsPoints}
-          onMapInstance={setMapInstance}
-          editingElementId={editingElement?.id ?? null}
-          onGeometryChange={handleGeometryChange}
-          pasteEnabled={pasteEnabled}
-          onPasteAt={handlePasteElement}
-          canUndo={!historyBusy && history.undo.length > 0}
-          canRedo={!historyBusy && history.redo.length > 0}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          hiddenIds={hiddenIds}
-          onHiddenIdsChange={setHiddenIds}
-          basemap={basemap}
-          onBasemapChange={setBasemap}
-        />
+        {mapData ? (
+          <LeafletMap
+            mapKey={mapId}
+            center={center}
+            zoom={zoom}
+            elements={elements}
+            otherElements={otherElements}
+            showOtherElements={showOtherElements}
+            activeTool={activeTool}
+            drawingMode={drawingMode}
+            onNewElement={handleNewElement}
+            onElementLongPress={handleElementLongPress}
+            gpsPoints={gpsPoints}
+            onMapInstance={setMapInstance}
+            editingElementId={editingElement?.id ?? null}
+            onGeometryChange={handleGeometryChange}
+            pasteEnabled={pasteEnabled}
+            onPasteAt={handlePasteElement}
+            canUndo={!historyBusy && history.undo.length > 0}
+            canRedo={!historyBusy && history.redo.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            hiddenIds={hiddenIds}
+            onHiddenIdsChange={setHiddenIds}
+            basemap={basemap}
+            onBasemapChange={setBasemap}
+            onViewChange={handleMapViewChange}
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+            Carregando mapa...
+          </div>
+        )}
       </div>
 
       {exportOpen && exportSnapshot ? (
@@ -805,6 +1037,17 @@ export default function MapEditor() {
         </Suspense>
       ) : null}
 
+      {memorialOpen ? (
+        <Suspense fallback={null}>
+          <MemorialDialog
+            open={memorialOpen}
+            onOpenChange={setMemorialOpen}
+            elements={elements}
+            mapName={mapData?.name ?? ''}
+          />
+        </Suspense>
+      ) : null}
+
       {/* GPS Tracker */}
       <GpsTracker
         isActive={showGpsTracker}
@@ -816,6 +1059,8 @@ export default function MapEditor() {
       {editingElement && (
         <StylePanel
           element={editingElement}
+          elementCategories={elementCategories}
+          onAddCategory={handleAddElementCategory}
           onSave={handleStyleSave}
           onDelete={(id) => {
             const el =

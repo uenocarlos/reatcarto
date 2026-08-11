@@ -1,3 +1,5 @@
+import { buildCategoryIndex, normalizeCategoryId } from '../elementCategories.js';
+
 const DEFAULT_STYLE = {
   point: { icon_name: 'pin', icon_color: '#F97316', custom_icon_url: '' },
   line: { color: '#F97316', opacity: 100, weight: 3, dash_style: 'solid' },
@@ -23,11 +25,10 @@ export const CATEGORY_META = Object.freeze({
   terra: { label: 'Terra' },
   agua: { label: 'Agua' },
   conflito: { label: 'Conflito' },
-  terra_agua: { label: 'Terra e Agua' },
   outros: { label: 'Outros' },
 });
 
-export const CATEGORY_ORDER = Object.freeze(['terra', 'agua', 'conflito', 'terra_agua', 'outros']);
+export const CATEGORY_ORDER = Object.freeze(['terra', 'agua', 'conflito', 'outros']);
 
 const DASH_LABELS = Object.freeze({
   solid: 'Solido',
@@ -53,10 +54,7 @@ const ICON_LABELS = Object.freeze({
 });
 
 export function categoryBucket(raw) {
-  const key = String(raw ?? '').trim().toLowerCase();
-  if (key === 'terra' || key === 'agua' || key === 'conflito' || key === 'terra_agua') return key;
-  if (!key) return 'terra';
-  return 'outros';
+  return normalizeCategoryId(raw);
 }
 
 export function parseStyle(el) {
@@ -271,23 +269,42 @@ export function buildTypeGroups(elements = []) {
   };
 }
 
-export function buildCategoryGroups(elements = []) {
+export function buildCategoryGroups(elements = [], elementCategories = []) {
   const rawByType = splitElementsByType(elements);
   const allGroups = TYPE_ORDER.flatMap((type) => groupElements(rawByType[type], type));
-  const raw = Object.fromEntries(CATEGORY_ORDER.map((category) => [category, []]));
-  const counts = Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0]));
+  const index = buildCategoryIndex(elementCategories);
+  const usedIds = new Set(elements.map((el) => categoryBucket(el?.element_category)));
+  const categoryOrder = [...index.order];
+  for (const id of usedIds) {
+    if (!categoryOrder.includes(id)) categoryOrder.push(id);
+  }
+
+  const raw = Object.fromEntries(categoryOrder.map((category) => [category, []]));
+  const counts = Object.fromEntries(categoryOrder.map((category) => [category, 0]));
+  const groups = Object.fromEntries(categoryOrder.map((category) => [category, []]));
 
   for (const el of elements) {
     const category = categoryBucket(el?.element_category);
+    if (!raw[category]) {
+      raw[category] = [];
+      counts[category] = 0;
+      groups[category] = [];
+      categoryOrder.push(category);
+    }
     raw[category].push(el);
     counts[category] += 1;
   }
 
-  const groups = Object.fromEntries(CATEGORY_ORDER.map((category) => [
-    category,
-    allGroups.filter((group) => group.category === category),
-  ]));
+  for (const category of categoryOrder) {
+    groups[category] = allGroups.filter((group) => group.category === category);
+  }
 
-  return { groups, raw, counts };
+  return {
+    groups,
+    raw,
+    counts,
+    categoryOrder,
+    categoryLabel: (category) => index.labelFor(category) || CATEGORY_META[category]?.label || category,
+  };
 }
 

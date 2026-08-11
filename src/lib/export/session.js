@@ -89,22 +89,59 @@ export function deriveDefaultLegendLayout(elements = [], hiddenIds = new Set()) 
     widthPct = Math.min(92, columns * 17);
   }
 
-  const itemRows = Math.ceil(itemCount / columns);
-  const estimatedHeightPx = 50 + itemRows * 30 + topicCount * 24;
-  const heightPct = Math.max(24, Math.min(90, Math.ceil((estimatedHeightPx / 420) * 100)));
+  const insideMetrics = deriveLegendInsideMetrics(items, { columns, fontPx });
 
   return {
     columns,
     fontPx,
     spacing: itemCount > 27 ? 'very_compact' : itemCount > 14 ? 'compact' : 'normal',
     inside: {
-      xPct: 100 - widthPct - 3,
-      yPct: 100 - heightPct - 3,
-      wPct: widthPct,
-      hPct: heightPct,
+      xPct: 100 - insideMetrics.wPct - 3,
+      yPct: 100 - insideMetrics.hPct - 3,
+      wPct: insideMetrics.wPct,
+      hPct: insideMetrics.hPct,
     },
     itemCount,
   };
+}
+
+/**
+ * Estimate inside-legend box size from rendered items.
+ * @param {Array<{ symbolKind?: string }>} items
+ * @param {{ columns?: number, fontPx?: number, mapHeightPx?: number }} [options]
+ */
+export function deriveLegendInsideMetrics(items = [], options = {}) {
+  const columns = Math.max(1, Number(options.columns) || 1);
+  const fontPx = Math.max(8, Number(options.fontPx) || 12);
+  const mapHeightPx = Math.max(200, Number(options.mapHeightPx) || 420);
+  const itemCount = items.filter((item) => item.symbolKind !== 'topic').length;
+  const topicCount = items.filter((item) => item.symbolKind === 'topic').length;
+  const itemRows = Math.max(1, Math.ceil(itemCount / columns));
+  const rowHeight = fontPx + 16;
+  const estimatedHeightPx = 42 + itemRows * rowHeight + topicCount * (fontPx + 10);
+  const hPct = Math.max(18, Math.min(90, Math.ceil((estimatedHeightPx / mapHeightPx) * 100)));
+
+  let wPct = 30;
+  if (itemCount > 6 && itemCount <= 14) wPct = 46;
+  else if (itemCount > 14 && itemCount <= 27) wPct = 64;
+  else if (itemCount > 27) wPct = Math.min(92, columns * 17);
+
+  return { wPct, hPct };
+}
+
+/**
+ * Grow inside-legend metrics when new items require more room.
+ * @param {{ xPct: number, yPct: number, wPct: number, hPct: number }} currentInside
+ * @param {Array<{ symbolKind?: string }>} items
+ * @param {{ columns?: number, fontPx?: number, mapHeightPx?: number }} [options]
+ */
+export function fitLegendInsideForItems(currentInside, items, options = {}) {
+  const needed = deriveLegendInsideMetrics(items, options);
+  const wPct = Math.max(Number(currentInside?.wPct) || needed.wPct, needed.wPct);
+  const hPct = Math.max(Number(currentInside?.hPct) || needed.hPct, needed.hPct);
+  const xPct = Math.max(0, Math.min(100 - wPct, Number(currentInside?.xPct) || 0));
+  const yPct = Math.max(0, Math.min(100 - hPct, Number(currentInside?.yPct) || 0));
+  return { xPct, yPct, wPct, hPct };
 }
 
 /**
@@ -132,6 +169,7 @@ export function createEditorExportSnapshot(input = {}) {
     hiddenIds,
     basemap: String(input.basemap ?? 'branco'),
     elements: exportableElements,
+    elementCategories: Array.isArray(input.elementCategories) ? [...input.elementCategories] : [],
   };
 }
 
@@ -177,6 +215,7 @@ export function createDefaultExportSession(snapshot) {
     center: { ...snapshot.center },
     zoom: snapshot.zoom,
     elements: snapshot.elements.map((el) => ({ ...el })),
+    elementCategories: Array.isArray(snapshot.elementCategories) ? [...snapshot.elementCategories] : [],
     isGenerating: false,
     generationError: null,
     geoLoadError: null,

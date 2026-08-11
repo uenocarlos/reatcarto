@@ -158,7 +158,9 @@ export default function ExportLegend({
         left: `${effectiveInside.xPct}%`,
         top: `${effectiveInside.yPct}%`,
         width: `${effectiveInside.wPct}%`,
-        height: `${effectiveInside.hPct}%`,
+        minHeight: `${effectiveInside.hPct}%`,
+        height: 'auto',
+        maxHeight: '92%',
         fontSize: `${legendFontPx}px`,
       };
     }
@@ -207,7 +209,9 @@ export default function ExportLegend({
       el.style.left = `${clamped.xPct}%`;
       el.style.top = `${clamped.yPct}%`;
       el.style.width = `${clamped.wPct}%`;
-      el.style.height = `${clamped.hPct}%`;
+      el.style.minHeight = `${clamped.hPct}%`;
+      el.style.height = 'auto';
+      el.style.maxHeight = '92%';
     }
     return clamped;
   }, [clampInside]);
@@ -348,7 +352,14 @@ export default function ExportLegend({
       >
         <span className="export-legend__title">Legenda</span>
         {canMove ? (
-          <span className="export-legend__drag-hint" aria-hidden title="Arrastar">⠿</span>
+          <span
+            className="export-legend__drag-hint"
+            data-export-exclude="true"
+            aria-hidden
+            title="Arrastar"
+          >
+            ⠿
+          </span>
         ) : null}
       </div>
       <div className="export-legend__rule" aria-hidden />
@@ -358,6 +369,7 @@ export default function ExportLegend({
           type="button"
           className="export-legend__resize-handle export-legend__resize-handle--edge-w"
           data-testid="export-legend-resize-handle"
+          data-export-exclude="true"
           aria-label="Redimensionar legenda"
           onPointerDown={(event) => onResizeStart('w', event)}
         />
@@ -415,6 +427,7 @@ export default function ExportLegend({
             type="button"
             className={`export-legend__rh export-legend__rh--${handle}`}
             data-testid={`export-legend-rh-${handle}`}
+            data-export-exclude="true"
             aria-label={`Redimensionar ${handle}`}
             onPointerDown={(event) => onResizeStart(handle, event)}
           />

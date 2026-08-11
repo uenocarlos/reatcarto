@@ -105,16 +105,18 @@ function auth_register(array $input): array
     }
 
     $config = app_config();
+    $requireVerification = email_verification_required();
     $pdo = db();
+    $verificationToken = null;
     $pdo->beginTransaction();
     try {
         $stmt = $pdo->prepare(
             'INSERT INTO users (
                 username, email, password_hash, full_name, organization, job_title, phone,
-                role, status, terms_version, privacy_version, consent_accepted_at
+                role, status, email_verified_at, terms_version, privacy_version, consent_accepted_at
             ) VALUES (
                 :username, :email, :password_hash, :full_name, :organization, :job_title, :phone,
-                :role, :status, :terms_version, :privacy_version, NOW()
+                :role, :status, :email_verified_at, :terms_version, :privacy_version, NOW()
             ) RETURNING *'
         );
         $stmt->execute([
@@ -126,12 +128,15 @@ function auth_register(array $input): array
             'job_title' => trim((string) $input['job_title']),
             'phone' => trim((string) $input['phone']),
             'role' => 'field',
-            'status' => 'pending_verification',
+            'status' => $requireVerification ? 'pending_verification' : 'active',
+            'email_verified_at' => $requireVerification ? null : date('Y-m-d H:i:s'),
             'terms_version' => $config['terms_version'],
             'privacy_version' => $config['privacy_version'],
         ]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        $token = create_verification_token($pdo, (string) $user['id']);
+        if ($requireVerification) {
+            $verificationToken = create_verification_token($pdo, (string) $user['id']);
+        }
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
@@ -150,11 +155,16 @@ function auth_register(array $input): array
         throw $e;
     }
 
-    Mailer::sendVerificationEmail($email, $token);
+    if ($requireVerification) {
+        Mailer::sendVerificationEmail($email, $verificationToken);
+    } else {
+        register_session_for_user((string) $user['id'], (string) $user['role']);
+    }
 
     return [
         'success' => true,
         'user' => serialize_user($user),
+        'email_verification_required' => $requireVerification,
     ];
 }
 
@@ -290,9 +300,6 @@ function auth_login(string $identifier, string $password): array
         auth_fail('validation_error', 'Validation failed.', 400, $fields);
     }
 
-    $ip = request_client_ip();
-    enforce_rate_limit(rate_limit_bucket('login', $ip, $identifier));
-
     $user = fetch_user_by_identifier($identifier);
 
     $hashForVerify = $user !== null
@@ -304,7 +311,7 @@ function auth_login(string $identifier, string $password): array
         auth_fail('unauthenticated', 'Invalid credentials.', 401);
     }
 
-    if ($user['status'] === 'pending_verification') {
+    if (email_verification_required() && $user['status'] === 'pending_verification') {
         auth_fail(
             'account_pending',
             'Email verification is required. Check your inbox or request a new verification email.',

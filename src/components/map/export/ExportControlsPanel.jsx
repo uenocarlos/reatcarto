@@ -26,7 +26,6 @@ import {
   setFormat,
   setDpi,
   setLegendColumns,
-  setMapChrome,
   setLocationCount,
   validateLegendFontPx,
   validateLegendSpacing,
@@ -35,8 +34,6 @@ import {
 } from '@/lib/export';
 import {
   buildCategoryGroups,
-  CATEGORY_META,
-  CATEGORY_ORDER,
 } from '@/lib/export/layerGrouping';
 
 const SPACING_LABELS = {
@@ -87,7 +84,10 @@ export default function ExportControlsPanel({
 }) {
   const [geoOptions, setGeoOptions] = useState({ states: [], municipalities: [] });
   const patch = (partial) => onSessionChange((prev) => ({ ...prev, ...partial }));
-  const grouped = useMemo(() => buildCategoryGroups(session.elements), [session.elements]);
+  const grouped = useMemo(
+    () => buildCategoryGroups(session.elements, session.elementCategories),
+    [session.elements, session.elementCategories],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -422,58 +422,6 @@ export default function ExportControlsPanel({
           </div>
         </ControlGroup>
 
-        <ControlGroup title="Elementos cartograficos" testId="export-control-group-chrome">
-          <p className="text-xs text-muted-foreground mb-3">
-            Arraste o norte e a escala diretamente na previa ou ajuste pelos campos abaixo.
-          </p>
-          {[
-            { key: 'north', label: 'Norte', size: session.northSizePx, position: session.northPosition },
-            { key: 'scale', label: 'Escala', size: session.scaleSizePx, position: session.scalePosition },
-          ].map((control) => (
-            <fieldset key={control.key} className="space-y-2 rounded-md border p-2 mb-2">
-              <legend className="px-1 text-xs font-semibold">{control.label}</legend>
-              <div className="space-y-1">
-                <Label htmlFor={`export-${control.key}-size`}>Tamanho ({Math.round(control.size)} px)</Label>
-                <Slider
-                  id={`export-${control.key}-size`}
-                  data-testid={`export-${control.key}-size`}
-                  min={control.key === 'north' ? 32 : 80}
-                  max={control.key === 'north' ? 140 : 260}
-                  step={1}
-                  value={[control.size]}
-                  onValueChange={([sizePx]) => onSessionChange((prev) => setMapChrome(prev, control.key, { sizePx }))}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label htmlFor={`export-${control.key}-x`}>Horizontal (%)</Label>
-                  <Input
-                    id={`export-${control.key}-x`}
-                    data-testid={`export-${control.key}-x`}
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={Math.round(control.position.xPct)}
-                    onChange={(event) => onSessionChange((prev) => setMapChrome(prev, control.key, { xPct: event.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor={`export-${control.key}-y`}>Vertical (%)</Label>
-                  <Input
-                    id={`export-${control.key}-y`}
-                    data-testid={`export-${control.key}-y`}
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={Math.round(control.position.yPct)}
-                    onChange={(event) => onSessionChange((prev) => setMapChrome(prev, control.key, { yPct: event.target.value }))}
-                  />
-                </div>
-              </div>
-            </fieldset>
-          ))}
-        </ControlGroup>
-
         <ControlGroup title="Camadas" testId="export-control-group-camadas">
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm">
@@ -501,7 +449,7 @@ export default function ExportControlsPanel({
                     Nenhum elemento neste mapa.
                   </p>
                 ) : (
-                  CATEGORY_ORDER.map((category) => {
+                  grouped.categoryOrder.map((category) => {
                     const list = grouped.groups[category];
                     if (!list.length) return null;
                     const allHidden = categoryAllHidden(category);
@@ -514,7 +462,7 @@ export default function ExportControlsPanel({
                         >
                           <Layers className="w-4 h-4 text-primary shrink-0" />
                           <span className="text-xs font-semibold flex-1 text-left">
-                            {CATEGORY_META[category]?.label || category}
+                            {grouped.categoryLabel(category)}
                           </span>
                           <span className="text-[10px] text-muted-foreground tabular-nums">
                             {grouped.counts[category]}

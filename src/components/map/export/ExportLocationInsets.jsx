@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, GeoJSON, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { filterPolygonFeatures } from './geoPolygonUtils';
-import { GraticuleOverlay, MapChromeOverlay } from './MapChrome';
+import { GraticuleOverlay, MapChromeOverlay, MapInvalidateSize } from './MapChrome';
 
 const MUNICIPIOS_FILE_BY_UF = Object.freeze({
   AC: 'ac',
@@ -141,6 +141,7 @@ function InsetMap({
     : filterPolygonFeatures(statesGeoJson);
   const bounds = useMemo(() => {
     if (inset.kind === 'detail' && municipioFeature.features.length) return buildBounds(municipioFeature);
+    if (inset.kind === 'overview') return buildBounds(contextData);
     if (stateFeature.features.length) return buildBounds(stateFeature);
     return buildBounds(contextData);
   }, [contextData, municipioFeature, stateFeature, inset.kind]);
@@ -155,7 +156,7 @@ function InsetMap({
       <div className="export-location-inset__frame">
         <MapContainer
           center={[-14.235, -51.9253]}
-          zoom={4}
+          zoom={7}
           scrollWheelZoom={false}
           dragging={false}
           zoomControl={false}
@@ -164,6 +165,7 @@ function InsetMap({
           data-testid={`export-location-inset-map-${inset.id}`}
         >
           <FitBoundsAndResize bounds={bounds} />
+          <MapInvalidateSize />
           <TileLayer
             url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
             crossOrigin="anonymous"

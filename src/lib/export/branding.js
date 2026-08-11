@@ -9,6 +9,10 @@ export const INSTITUTIONAL_FOOTER_LINES = Object.freeze([
 export const EXPORT_LOGO_PATH = '/export/logoreat.png';
 export const EXPORT_NORTH_PATH = '/export/north.png';
 
+export function isReatCartoBrandingLine(line) {
+  return line === INSTITUTIONAL_FOOTER_LINES[0];
+}
+
 /**
  * Build footer line list including user credits without removing institutional lines.
  * @param {{ authorship?: string, technicalResponsible?: string }} params

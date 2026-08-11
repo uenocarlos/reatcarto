@@ -63,8 +63,10 @@ function email_exists(string $email, ?string $excludeUserId = null): bool
  */
 function serialize_user(array $row): array
 {
+    $userId = (string) $row['id'];
+
     return [
-        'id' => (string) $row['id'],
+        'id' => $userId,
         'username' => (string) $row['username'],
         'email' => (string) $row['email'],
         'full_name' => (string) $row['full_name'],
@@ -75,6 +77,7 @@ function serialize_user(array $row): array
         'status' => (string) $row['status'],
         'email_verified' => $row['email_verified_at'] !== null,
         'pending_email' => $row['pending_email'] !== null ? (string) $row['pending_email'] : null,
+        'element_categories' => list_user_element_categories($userId),
     ];
 }
 

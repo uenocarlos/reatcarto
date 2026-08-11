@@ -18,6 +18,30 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+/** Persiste a vista do mapa após pan/zoom (debounce no pai). */
+function MapViewPersistence({ enabled = false, onViewChange }) {
+  const map = useMap();
+  const callbackRef = useRef(onViewChange);
+  callbackRef.current = onViewChange;
+
+  useMapEvents({
+    moveend: () => {
+      if (!enabled || !callbackRef.current) return;
+      const c = map.getCenter();
+      const z = map.getZoom();
+      callbackRef.current({ lat: c.lat, lng: c.lng, zoom: z });
+    },
+    zoomend: () => {
+      if (!enabled || !callbackRef.current) return;
+      const c = map.getCenter();
+      const z = map.getZoom();
+      callbackRef.current({ lat: c.lat, lng: c.lng, zoom: z });
+    },
+  });
+
+  return null;
+}
+
 const BASEMAP_URLS = {
   branco: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
   osm: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -591,6 +615,8 @@ export default function LeafletMap({
   onHiddenIdsChange,
   basemap: controlledBasemap,
   onBasemapChange,
+  onViewChange,
+  mapKey,
 }) {
   const [tempFreehand, setTempFreehand] = useState([]);
   const [pointByPointCoords, setPointByPointCoords] = useState([]);
@@ -662,6 +688,7 @@ export default function LeafletMap({
     <div className="relative w-full h-full" style={{ minHeight: 0 }}>
       <ControlStyles />
       <MapContainer 
+        key={mapKey || undefined}
         center={center} 
         zoom={zoom} 
         style={{ width: '100%', height: '100%' }} 
@@ -669,6 +696,7 @@ export default function LeafletMap({
         attributionControl={false}
       >
         <MapInstanceCapture />
+        <MapViewPersistence enabled={!readOnly && !!onViewChange} onViewChange={onViewChange} />
 
         <TileLayer key={basemap} url={basemapUrl} />
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -9,6 +10,7 @@ import { toast } from 'sonner';
 
 export default function Register() {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [loading, setLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const [form, setForm] = useState({
@@ -30,9 +32,16 @@ export default function Register() {
     setFieldErrors({});
     setLoading(true);
     try {
-      await api.auth.register({ ...form, consent_accepted: form.consent });
-      toast.success('Conta criada! Verifique seu email.');
-      navigate('/verify', { state: { email: form.email } });
+      const result = await api.auth.register({ ...form, consent_accepted: form.consent });
+      if (result.email_verification_required) {
+        toast.success('Conta criada! Verifique seu email.');
+        navigate('/verify', { state: { email: form.email } });
+        return;
+      }
+
+      await login(form.username, form.password);
+      toast.success('Conta criada com sucesso!');
+      navigate('/');
     } catch (error) {
       if (error instanceof ApiError && error.fields) {
         setFieldErrors(error.fields);

@@ -85,7 +85,10 @@ export const api = {
   auth: {
     register: async (input) => {
       const data = await apiFetch('/auth/register.php', { method: 'POST', body: input });
-      return data.user;
+      return {
+        user: data.user,
+        email_verification_required: data.email_verification_required === true,
+      };
     },
     verifyEmail: async (token, type) => {
       const data = await apiFetch('/auth/verify.php', {
@@ -118,6 +121,17 @@ export const api = {
     updateProfile: async (patch) => {
       const data = await apiFetch('/auth/profile.php', { method: 'PATCH', body: patch });
       return data.user;
+    },
+    listElementCategories: async () => {
+      const data = await apiFetch('/auth/element_categories.php', { method: 'GET' });
+      return data.categories ?? [];
+    },
+    addElementCategory: async (label) => {
+      const data = await apiFetch('/auth/element_categories.php', {
+        method: 'POST',
+        body: { label },
+      });
+      return data.category;
     },
     changeUsername: async (username) => {
       const data = await apiFetch('/auth/change_username.php', {

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:php": "php -S localhost:8080",
+    "dev:php": "node scripts/start-php-server.mjs",
     "dev:all": "concurrently -n vite,php -c cyan,magenta \"npm run dev\" \"npm run dev:php\"",
     "build": "vite build",
     "lint": "eslint . --quiet",
@@ -13,7 +13,8 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "geo:index": "node scripts/build-municipios-search-index.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",

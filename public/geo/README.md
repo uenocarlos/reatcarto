@@ -44,3 +44,4 @@ Propriedades esperadas:
 
 - Estados: `GET /geo/ufs.geojson` — `ExportLocationInsets.jsx`
 - Municípios/malha: `GET /geo/municipios/{code}.geojson` — mesmo componente, ao marcar **Malha municipal**
+- Busca de cidades (editor): `GET /geo/municipios-search-index.json` — índice leve gerado por `node scripts/build-municipios-search-index.mjs`

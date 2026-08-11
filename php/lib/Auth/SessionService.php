@@ -119,7 +119,7 @@ function require_valid_session(): array
 function require_active_user(): array
 {
     $user = require_valid_session();
-    if ($user['status'] === 'pending_verification') {
+    if (email_verification_required() && $user['status'] === 'pending_verification') {
         auth_fail(
             'account_pending',
             'Email verification is required before this action.',

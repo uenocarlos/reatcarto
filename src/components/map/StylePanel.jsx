@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -13,7 +13,7 @@ import {
   Camera as CameraIcon, Trees, Car, AlertTriangle, Info, MapPin as PinIcon, 
   Ghost, Skull, Flame, Ship, Waves, Fish, LayoutGrid, Type, Plus, Pencil, Trash2
 } from 'lucide-react';
-import { api } from '@/api/apiClient';
+import { normalizeCategoryId } from '@/lib/elementCategoryStore';
 import { toast } from 'sonner';
 import { storeForUser, getOfflineUserId } from '@/lib/offline/offlineApi';
 import {
@@ -308,7 +308,15 @@ const defaultStyles = {
   polygon: { border_color: '#F97316', border_opacity: 100, border_weight: 2, border_dash: 'solid', fill_color: '#FED7AA', fill_opacity: 40 },
 };
 
-export default function StylePanel({ element, onSave, onDelete, onClose, onPreview }) {
+export default function StylePanel({
+  element,
+  elementCategories = [],
+  onAddCategory,
+  onSave,
+  onDelete,
+  onClose,
+  onPreview,
+}) {
   const type = element?.element_type || 'point';
   const existingStyleParsed = element?.style
     ? (typeof element.style === 'string' ? (() => { try { return JSON.parse(element.style); } catch { return {}; } })() : element.style)
@@ -343,6 +351,25 @@ export default function StylePanel({ element, onSave, onDelete, onClose, onPrevi
   );
   const [videos, setVideos] = useState(element?.video_urls || []);
   const [uploading, setUploading] = useState(false);
+  const [newCategoryLabel, setNewCategoryLabel] = useState('');
+  const [addingCategory, setAddingCategory] = useState(false);
+
+  const selectedCategoryId = useMemo(() => {
+    const raw = details.element_category;
+    const direct = elementCategories.find((category) => category.id === raw);
+    if (direct) return direct.id;
+
+    const normalized = normalizeCategoryId(raw);
+    const byNormalized = elementCategories.find((category) => category.id === normalized);
+    if (byNormalized) return byNormalized.id;
+
+    const byLabel = elementCategories.find(
+      (category) => category.label.localeCompare(String(raw ?? ''), 'pt-BR', { sensitivity: 'accent' }) === 0,
+    );
+    if (byLabel) return byLabel.id;
+
+    return elementCategories[0]?.id ?? 'terra';
+  }, [details.element_category, elementCategories]);
 
   // Notify parent of style changes in real time (preserva dados de pesqueiro)
   useEffect(() => {
@@ -434,6 +461,7 @@ export default function StylePanel({ element, onSave, onDelete, onClose, onPrevi
     const stylePayload = mergeStyleWithPesqueiro(style, isPesqueiro, pescarias);
     onSave({
       ...details,
+      element_category: selectedCategoryId,
       style: JSON.stringify(stylePayload),
       icon_name: style.icon_name,
       icon_color: style.icon_color,
@@ -441,6 +469,25 @@ export default function StylePanel({ element, onSave, onDelete, onClose, onPrevi
       photo_urls: photos.map((p) => p.url),
       video_urls: videos,
     });
+  };
+
+  const handleAddCategory = async () => {
+    const label = newCategoryLabel.trim();
+    if (!label || !onAddCategory) return;
+
+    setAddingCategory(true);
+    try {
+      const category = await onAddCategory(label);
+      if (category?.id) {
+        setDetails((prev) => ({ ...prev, element_category: category.id }));
+        setNewCategoryLabel('');
+        toast.success(`Tipo "${category.label}" adicionado`);
+      }
+    } catch (error) {
+      toast.error(error?.message || 'Não foi possível adicionar o tipo');
+    } finally {
+      setAddingCategory(false);
+    }
   };
 
   const handlePesqueiroChange = (value) => {
@@ -698,15 +745,49 @@ export default function StylePanel({ element, onSave, onDelete, onClose, onPrevi
           <TabsContent value="details" className="p-3 sm:p-4 space-y-4">
             <div>
               <Label className="text-xs mb-1 block">Tipo</Label>
-              <Select value={details.element_category} onValueChange={(v) => setDetails({ ...details, element_category: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="terra">Terra</SelectItem>
-                  <SelectItem value="agua">Água</SelectItem>
-                  <SelectItem value="conflito">Conflito</SelectItem>
-                  <SelectItem value="terra_agua">Terra e Água</SelectItem>
+              <Select
+                value={selectedCategoryId}
+                onValueChange={(value) => setDetails({ ...details, element_category: value })}
+              >
+                <SelectTrigger><SelectValue placeholder="Selecione o tipo" /></SelectTrigger>
+                <SelectContent className="z-[1100]">
+                  {elementCategories.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {onAddCategory ? (
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    value={newCategoryLabel}
+                    onChange={(e) => setNewCategoryLabel(e.target.value)}
+                    placeholder="Novo tipo (ex.: Vegetação)"
+                    className="h-8 text-xs"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleAddCategory();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1"
+                    disabled={!newCategoryLabel.trim() || addingCategory}
+                    onClick={() => { void handleAddCategory(); }}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Adicionar
+                  </Button>
+                </div>
+              ) : null}
+              <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
+                Tipos personalizados ficam salvos na sua conta e aparecem na exportação do mapa.
+              </p>
             </div>
             <div>
               <Label className="text-xs mb-1 block">Nome</Label>

@@ -14,6 +14,33 @@ if (typeof window !== 'undefined') {
 /**
  * Leaflet AutoGraticule — grades lat/lon com rótulos nas bordas.
  */
+export function resolveGraticuleMinDistance(map) {
+  try {
+    const container = map?.getContainer?.();
+    const height = container?.clientHeight || 420;
+    return Math.max(28, Math.min(100, Math.round(height / 4.2)));
+  } catch {
+    return 100;
+  }
+}
+
+function createGraticuleLayer(AutoGraticule, map) {
+  const layer = new AutoGraticule({
+    redraw: 'move',
+    minDistance: resolveGraticuleMinDistance(map),
+  });
+  layer.lineStyle = {
+    ...layer.lineStyle,
+    color: '#333',
+    opacity: 0.6,
+    dashArray: '2 2',
+    weight: 0.6,
+    interactive: false,
+  };
+  layer.addTo(map);
+  return layer;
+}
+
 export function GraticuleOverlay() {
   const map = useMap();
 
@@ -22,30 +49,54 @@ export function GraticuleOverlay() {
 
     let cancelled = false;
     let layer = null;
+    let resizeTimer = 0;
 
-    (async () => {
+    const refresh = async () => {
       try {
+        if (typeof window !== 'undefined') window.L = L;
         const mod = await import('leaflet-auto-graticule');
         const AutoGraticule = mod.default || mod;
         if (cancelled || typeof AutoGraticule !== 'function') return;
-        layer = new AutoGraticule({ redraw: 'move', minDistance: 100 });
-        // v2 exposes line styling separately from constructor options.
-        layer.lineStyle = {
-          ...layer.lineStyle,
-          color: '#333',
-          opacity: 0.6,
-          dashArray: '2 2',
-          weight: 0.6,
-          interactive: false,
-        };
-        layer.addTo(map);
+        if (layer) {
+          try {
+            map.removeLayer(layer);
+          } catch {
+            layer?.remove?.();
+          }
+          layer = null;
+        }
+        layer = createGraticuleLayer(AutoGraticule, map);
       } catch {
         layer = null;
       }
-    })();
+    };
+
+    const scheduleRefresh = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        refresh();
+      }, 80);
+    };
+
+    refresh();
+    const delayed = window.setTimeout(refresh, 260);
+
+    const container = typeof map.getContainer === 'function' ? map.getContainer() : null;
+    let resizeObserver;
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      resizeObserver = new ResizeObserver(scheduleRefresh);
+      resizeObserver.observe(container);
+    }
+    map.on?.('moveend', scheduleRefresh);
+    map.on?.('zoomend', scheduleRefresh);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(resizeTimer);
+      window.clearTimeout(delayed);
+      resizeObserver?.disconnect();
+      map.off?.('moveend', scheduleRefresh);
+      map.off?.('zoomend', scheduleRefresh);
       try {
         if (layer) {
           if (map.removeLayer) map.removeLayer(layer);
@@ -60,6 +111,47 @@ export function GraticuleOverlay() {
   return (
     <div data-testid="export-graticule" className="export-graticule-marker" aria-hidden="true" />
   );
+}
+
+/** Leaflet measures the container once; animated parents may leave it at 0×0 until resize. */
+export function MapInvalidateSize() {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || typeof map.invalidateSize !== 'function') return undefined;
+
+    const refresh = () => {
+      try {
+        map.invalidateSize({ animate: false });
+      } catch {
+        /* mock or unmounted map */
+      }
+    };
+
+    refresh();
+    const frame = requestAnimationFrame(refresh);
+    const t1 = window.setTimeout(refresh, 50);
+    const t2 = window.setTimeout(refresh, 250);
+    const t3 = window.setTimeout(refresh, 600);
+
+    const container = typeof map.getContainer === 'function' ? map.getContainer() : null;
+    const parent = container?.parentElement;
+    let observer;
+    if (typeof ResizeObserver !== 'undefined' && parent) {
+      observer = new ResizeObserver(() => refresh());
+      observer.observe(parent);
+    }
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+      observer?.disconnect();
+    };
+  }, [map]);
+
+  return null;
 }
 
 /**
@@ -77,7 +169,7 @@ function clampPosition(position, element, host) {
   };
 }
 
-function MovableControl({ kind, position, sizePx, onChange, children }) {
+function MovableControl({ kind, position, sizePx, onChange, anchor = 'left', children }) {
   const ref = useRef(null);
   const dragRef = useRef(null);
   const [livePosition, setLivePosition] = useState(null);
@@ -117,13 +209,21 @@ function MovableControl({ kind, position, sizePx, onChange, children }) {
     setLivePosition(next);
   }, []);
 
+  const positionStyle = anchor === 'right'
+    ? { right: `${effective.xPct}%`, top: `${effective.yPct}%`, width: `${sizePx}px` }
+    : { left: `${effective.xPct}%`, top: `${effective.yPct}%`, width: `${sizePx}px` };
+
   return (
     <div
       ref={ref}
-      className={`export-map-control export-map-control--${kind}${dragRef.current ? ' is-dragging' : ''}`}
+      className={[
+        `export-map-control export-map-control--${kind}`,
+        anchor === 'right' ? 'export-map-control--anchor-right' : '',
+        dragRef.current ? ' is-dragging' : '',
+      ].filter(Boolean).join(' ')}
       data-collision-role={kind}
       data-testid={`export-${kind}-control`}
-      style={{ left: `${effective.xPct}%`, top: `${effective.yPct}%`, width: `${sizePx}px` }}
+      style={positionStyle}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={stopDrag}
@@ -207,10 +307,17 @@ export function MapChromeOverlay({
   onChromeChange,
 }) {
   const map = useMap();
-  const resolvedNorthPosition = northPosition ?? (compact ? { xPct: 5, yPct: 55 } : { xPct: 8, yPct: 68 });
-  const resolvedNorthSize = northSizePx ?? (compact ? 24 : 70);
-  const resolvedScalePosition = scalePosition ?? (compact ? { xPct: 4, yPct: 68 } : { xPct: 3, yPct: 86 });
-  const resolvedScaleSize = scaleSizePx ?? (compact ? 68 : 140);
+  const chromeAnchor = compact ? 'right' : 'left';
+  const resolvedNorthPosition = northPosition ?? (compact ? { xPct: 5, yPct: 48 } : { xPct: 8, yPct: 68 });
+  const resolvedNorthSize = northSizePx ?? (compact ? 42 : 70);
+  const resolvedScalePosition = scalePosition ?? (compact ? { xPct: 6, yPct: 63 } : { xPct: 3, yPct: 86 });
+  const resolvedScaleSize = scaleSizePx ?? (compact ? 90 : 140);
+  const compactChromeStyle = compact
+    ? {
+      '--export-compact-scale-width': `${resolvedScaleSize}px`,
+      '--export-compact-north-width': `${resolvedNorthSize}px`,
+    }
+    : undefined;
   const barWidthPx = resolvedScaleSize;
   const [scale, setScale] = useState(() => computeScaleLabel({ lat: -32, zoom: 11, barWidthPx }));
 
@@ -243,11 +350,19 @@ export function MapChromeOverlay({
   const middleLabel = formatScaleLabel(scale.distanceMeters / 2);
 
   return (
-    <div className="export-map-chrome" data-testid="export-map-chrome">
+    <div
+      className={[
+        'export-map-chrome',
+        compact ? 'export-map-chrome--compact' : '',
+      ].filter(Boolean).join(' ')}
+      data-testid="export-map-chrome"
+      style={compactChromeStyle}
+    >
       <MovableControl
         kind="north"
         position={resolvedNorthPosition}
         sizePx={resolvedNorthSize}
+        anchor={chromeAnchor}
         onChange={onChromeChange}
       >
         <img
@@ -262,6 +377,7 @@ export function MapChromeOverlay({
         kind="scale"
         position={resolvedScalePosition}
         sizePx={barWidthPx}
+        anchor={chromeAnchor}
         onChange={onChromeChange}
       >
         <div
@@ -467,7 +583,6 @@ export function CollisionMonitor({ elements = [], hiddenIds, onCollisionChange }
           : [];
         if (coveredElements.length > 0) {
           coveredElements.forEach((element) => collisions.push(`${aRole}:element:${String(element.id)}`));
-          a.dataset.collision = 'true';
         }
       }
 

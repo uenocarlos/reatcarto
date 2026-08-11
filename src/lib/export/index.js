@@ -43,6 +43,8 @@ export {
   setMapChrome,
   setLocationCount,
   deriveDefaultLegendLayout,
+  deriveLegendInsideMetrics,
+  fitLegendInsideForItems,
 } from './session.js';
 
 export {
