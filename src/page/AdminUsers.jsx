@@ -5,7 +5,9 @@ import { api, ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import AppShell, { IDENTITY_CARD_CLASS } from '@/components/layout/AppShell';
 
 export default function AdminUsers() {
   const queryClient = useQueryClient();
@@ -41,24 +43,22 @@ export default function AdminUsers() {
   };
 
   return (
-    <div className="min-h-screen bg-background p-6 max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h1 className="text-2xl font-bold">Administração — Usuários</h1>
-        <div className="flex gap-2">
+    <AppShell
+      title="Administração — Usuários"
+      maxWidth="max-w-4xl"
+      actions={
+        <>
           <Button variant="outline" asChild>
             <Link to="/admin/maps">Mapas</Link>
           </Button>
           <Button variant="outline" asChild>
             <Link to="/admin/audit">Auditoria</Link>
           </Button>
-          <Button variant="outline" asChild>
-            <Link to="/">Voltar</Link>
-          </Button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
       <form
-        className="flex gap-2"
+        className="flex gap-2 mb-6"
         onSubmit={(e) => {
           e.preventDefault();
           setSearch(q.trim());
@@ -73,23 +73,32 @@ export default function AdminUsers() {
       </form>
 
       {isLoading ? (
-        <p>Carregando…</p>
+        <div className="flex justify-center py-16">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
       ) : (
         <div className="space-y-4">
           {(data?.users ?? []).map((u) => (
-            <Card key={u.id}>
+            <Card key={u.id} className={IDENTITY_CARD_CLASS}>
               <CardHeader>
-                <CardTitle className="text-lg">
-                  {u.full_name} ({u.username})
+                <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
+                  <span>
+                    {u.full_name} ({u.username})
+                  </span>
+                  {u.status === 'deactivated' ? (
+                    <Badge variant="destructive" className="text-[10px]">Desativado</Badge>
+                  ) : (
+                    <Badge className="text-[10px] bg-green-600">Ativo</Badge>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p>{u.email}</p>
+                <p className="text-muted-foreground">{u.email}</p>
                 <p>
-                  Status: <strong>{u.status}</strong> · Verificado:{' '}
+                  <strong>Status:</strong> {u.status} · <strong>Verificado:</strong>{' '}
                   {u.email_verified ? 'sim' : 'não'}
                 </p>
-                <p>
+                <p className="text-muted-foreground">
                   {u.organization} — {u.job_title}
                 </p>
                 <Input
@@ -125,6 +134,6 @@ export default function AdminUsers() {
           )}
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }

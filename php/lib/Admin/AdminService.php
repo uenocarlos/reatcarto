@@ -404,6 +404,7 @@ function admin_mutate_delete_map(array $admin, array $input, string $reason): ar
     $before = format_map_record($map);
     $owner = fetch_user_by_id((string) $map['owner_id']);
     photos_delete_for_map($mapId);
+    videos_delete_for_map($mapId);
     db()->prepare('DELETE FROM maps WHERE id = :id')->execute(['id' => $mapId]);
     audit_append($admin, 'map.private_mutate_delete', 'map', $mapId, $reason, $before, null);
 
@@ -491,6 +492,7 @@ function admin_mutate_delete_element(array $admin, array $input, string $reason)
     $before = format_element_record($element, $photos);
 
     photos_delete_for_element($elementId);
+    videos_delete_for_element($elementId);
     db()->prepare('DELETE FROM map_elements WHERE id = :id')->execute(['id' => $elementId]);
     audit_append($admin, 'element.private_mutate_delete', 'element', $elementId, $reason, $before, null);
 

@@ -13,6 +13,7 @@ import StylePanel from '@/components/map/StylePanel';
 import ElementContextMenu from '@/components/map/ElementContextMenu';
 import GpsTracker from '@/components/map/GpsTracker';
 import CitySearchControl from '@/components/map/CitySearchControl';
+import LocateMapButton from '@/components/map/LocateMapButton';
 import { useAuth } from '@/lib/AuthContext';
 import { loadMunicipalitySearchIndex } from '@/lib/geocodeCities';
 import {
@@ -36,7 +37,19 @@ import {
   updatePayloadFromSnapshot,
 } from '@/lib/elementHistory';
 import ExportEntry from '@/components/map/ExportEntry';
+import MobileEditorActionsMenu from '@/components/map/MobileEditorActionsMenu';
+import MobileGeometryEditBar from '@/components/map/MobileGeometryEditBar';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { lockScreenOrientation, unlockScreenOrientation } from '@/lib/deviceViewport';
 import { createEditorExportSnapshot } from '@/lib/export/session';
+import {
+  resolveInitialMapView,
+  writeWorkingViewport,
+  writeMunicipioLabel,
+  readMunicipioLabel,
+  viewsAlmostEqual,
+} from '@/lib/mapViewport';
+import { getOfflineUserId, storeForUser } from '@/lib/offline/offlineApi';
 
 const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
 const MemorialDialog = lazy(() => import('@/components/map/MemorialDialog'));
@@ -66,6 +79,9 @@ export default function MapEditor() {
   const [exportSessionKey, setExportSessionKey] = useState(0);
   const [exportSnapshot, setExportSnapshot] = useState(null);
   const [memorialOpen, setMemorialOpen] = useState(false);
+  const [geometryEditMode, setGeometryEditMode] = useState(false);
+  const geometryBaselineRef = useRef(null);
+  const isMobile = useIsMobile();
   const historySilentRef = useRef(false);
   const skipOpenEditorRef = useRef(false);
   const pendingHistoryRef = useRef(null);
@@ -79,6 +95,8 @@ export default function MapEditor() {
   const pendingViewRef = useRef(null);
   const viewSaveTimerRef = useRef(null);
   const viewSaveInFlightRef = useRef(false);
+  const suppressViewPersistenceRef = useRef(0);
+  const userInteractedRef = useRef(false);
   const { getSyncEngine, isAuthenticated, user, refreshUser } = useAuth();
 
   useEffect(() => {
@@ -92,6 +110,8 @@ export default function MapEditor() {
     setHistory(empty);
     editingBaselineRef.current = null;
     pendingHistoryRef.current = null;
+    userInteractedRef.current = false;
+    suppressViewPersistenceRef.current = 0;
   }, [mapId]);
 
   const refreshPending = useCallback(async () => {
@@ -127,12 +147,13 @@ export default function MapEditor() {
   useEffect(() => {
     if (!mapData) return;
     mapVersionRef.current = mapData.version;
+    const resolved = resolveInitialMapView(mapId, mapData);
     savedViewRef.current = {
-      lat: Number(mapData.center_lat),
-      lng: Number(mapData.center_lng),
-      zoom: Number(mapData.zoom),
+      lat: resolved.lat,
+      lng: resolved.lng,
+      zoom: resolved.zoom,
     };
-  }, [mapData?.id, mapData?.version, mapData?.center_lat, mapData?.center_lng, mapData?.zoom]);
+  }, [mapId, mapData?.id, mapData?.version, mapData?.center_lat, mapData?.center_lng, mapData?.zoom, mapData?.updated_at]);
 
   // Pré-carrega índice local de municípios (busca do header)
   useEffect(() => {
@@ -141,6 +162,12 @@ export default function MapEditor() {
     void loadMunicipalitySearchIndex({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [mapData?.id]);
+
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    lockScreenOrientation('portrait-primary');
+    return () => unlockScreenOrientation();
+  }, [isMobile]);
 
   useEffect(() => {
     elementsRef.current = elements;
@@ -496,13 +523,17 @@ export default function MapEditor() {
     if (!contextElement) return;
     // Captura estado original ANTES de preview de estilo / arrasto de vértices
     editingBaselineRef.current = snapshotElement(contextElement);
+    setGeometryEditMode(false);
+    geometryBaselineRef.current = null;
     setEditingElement(contextElement);
     setContextMenu(null);
-    const type = contextElement?.element_type;
-    if (type === 'point') {
-      toast.info('Arraste o ponto no mapa para reposicionar. Salve no painel.');
-    } else if (type === 'line' || type === 'polygon') {
-      toast.info('Arraste os vértices (círculos brancos) para ajustar a geometria. Salve no painel.');
+    if (!isMobile) {
+      const type = contextElement?.element_type;
+      if (type === 'point') {
+        toast.info('Arraste o ponto no mapa para reposicionar. Salve no painel.');
+      } else if (type === 'line' || type === 'polygon') {
+        toast.info('Arraste os vértices ou os pontos intermediários (tracejados) para ajustar a geometria. Salve no painel.');
+      }
     }
   };
 
@@ -539,6 +570,7 @@ export default function MapEditor() {
       typeof copiedElement.style === 'string'
         ? copiedElement.style
         : JSON.stringify(copiedElement.style ?? {});
+    skipOpenEditorRef.current = true;
     createMutation.mutate({
       map_id: mapId,
       element_type: 'point',
@@ -692,23 +724,61 @@ export default function MapEditor() {
   const handleStyleClose = () => {
     // Descarta geometria / estilo pré-visualizado sem salvar
     editingBaselineRef.current = null;
+    geometryBaselineRef.current = null;
+    setGeometryEditMode(false);
     queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
     setEditingElement(null);
   };
 
-  const viewsAlmostEqual = useCallback((a, b) => {
-    if (!a || !b) return false;
-    return (
-      Math.abs(a.lat - b.lat) < 1e-6 &&
-      Math.abs(a.lng - b.lng) < 1e-6 &&
-      Math.round(a.zoom) === Math.round(b.zoom)
-    );
+  const handleStartGeometryEdit = useCallback(() => {
+    if (!editingElement) return;
+    geometryBaselineRef.current = editingElement.geojson;
+    setGeometryEditMode(true);
+  }, [editingElement]);
+
+  const handleCancelGeometryEdit = useCallback(() => {
+    if (geometryBaselineRef.current != null && editingElement) {
+      const geojson = geometryBaselineRef.current;
+      setEditingElement((prev) => (prev ? { ...prev, geojson } : null));
+      queryClient.setQueryData(['elements', mapId], (old = []) =>
+        old.map((el) =>
+          String(el.id) === String(editingElement.id) ? { ...el, geojson } : el
+        )
+      );
+    }
+    geometryBaselineRef.current = null;
+    setGeometryEditMode(false);
+  }, [editingElement, mapId, queryClient]);
+
+  const handleFinishGeometryEdit = useCallback(() => {
+    geometryBaselineRef.current = null;
+    setGeometryEditMode(false);
   }, []);
+
+  const viewsAlmostEqualStable = useCallback(viewsAlmostEqual, []);
+
+  const persistViewportLocally = useCallback(
+    (view) => {
+      if (!mapId || !view) return;
+      writeWorkingViewport(mapId, view);
+      if (!getOfflineUserId()) return;
+      try {
+        void storeForUser().upsertPreparedMap({
+          id: mapId,
+          center_lat: view.lat,
+          center_lng: view.lng,
+          zoom: view.zoom,
+        });
+      } catch {
+        /* offline store indisponível */
+      }
+    },
+    [mapId]
+  );
 
   const persistMapView = useCallback(
     async (view, { force = false } = {}) => {
       if (!mapId || !view) return;
-      if (!isOnline()) return;
       const next = {
         lat: Number(view.lat),
         lng: Number(view.lng),
@@ -717,7 +787,9 @@ export default function MapEditor() {
       if (!Number.isFinite(next.lat) || !Number.isFinite(next.lng) || !Number.isFinite(next.zoom)) {
         return;
       }
-      if (!force && viewsAlmostEqual(savedViewRef.current, next)) {
+      persistViewportLocally(next);
+      if (!isOnline()) return;
+      if (!force && viewsAlmostEqualStable(savedViewRef.current, next)) {
         pendingViewRef.current = null;
         return;
       }
@@ -784,47 +856,78 @@ export default function MapEditor() {
         }
       }
     },
-    [mapId, queryClient, viewsAlmostEqual]
+    [mapId, queryClient, viewsAlmostEqualStable, persistViewportLocally]
   );
+
+  const flushPendingMapView = useCallback(() => {
+    if (viewSaveTimerRef.current) {
+      clearTimeout(viewSaveTimerRef.current);
+      viewSaveTimerRef.current = null;
+    }
+    const pending = pendingViewRef.current;
+    if (!pending) return;
+    persistViewportLocally(pending);
+    if (isOnline()) {
+      void persistMapView(pending, { force: true });
+    }
+  }, [persistMapView, persistViewportLocally]);
 
   const handleMapViewChange = useCallback(
     (view) => {
-      pendingViewRef.current = {
+      const next = {
         lat: Number(view.lat),
         lng: Number(view.lng),
         zoom: Math.round(Number(view.zoom)),
       };
+      pendingViewRef.current = next;
+      persistViewportLocally(next);
       if (viewSaveTimerRef.current) clearTimeout(viewSaveTimerRef.current);
       viewSaveTimerRef.current = setTimeout(() => {
         const pending = pendingViewRef.current;
         if (pending) void persistMapView(pending);
       }, 700);
     },
-    [persistMapView]
+    [persistMapView, persistViewportLocally]
   );
 
-  // Flush da vista ao sair do editor / trocar de mapa
-  useEffect(() => {
-    return () => {
-      if (viewSaveTimerRef.current) {
-        clearTimeout(viewSaveTimerRef.current);
-        viewSaveTimerRef.current = null;
-      }
-      const pending = pendingViewRef.current;
-      if (pending && isOnline()) {
-        // fire-and-forget: manter posição ao reabrir
-        void api.entities.Map.update(mapId, {
-          center_lat: pending.lat,
-          center_lng: pending.lng,
-          zoom: pending.zoom,
-          base_version: mapVersionRef.current,
-        }).catch(() => {});
-      }
-    };
-  }, [mapId]);
+  const handleMunicipioSelect = useCallback(
+    (place) => {
+      if (!mapId || !place?.label) return;
+      writeMunicipioLabel(mapId, place.label);
+    },
+    [mapId]
+  );
 
-  const center = mapData ? [mapData.center_lat || -32.035, mapData.center_lng || -52.1] : [-32.035, -52.1];
-  const zoom = mapData?.zoom || 13;
+  const beginSuppressViewPersistence = useCallback(() => {
+    suppressViewPersistenceRef.current += 1;
+  }, []);
+
+  const endSuppressViewPersistence = useCallback(() => {
+    suppressViewPersistenceRef.current = Math.max(0, suppressViewPersistenceRef.current - 1);
+  }, []);
+
+  // Flush da vista ao sair do editor / trocar de mapa / fechar aba
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flushPendingMapView();
+    };
+    window.addEventListener('pagehide', flushPendingMapView);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', flushPendingMapView);
+      document.removeEventListener('visibilitychange', onHide);
+      flushPendingMapView();
+    };
+  }, [mapId, flushPendingMapView]);
+
+  const initialMapView = useMemo(
+    () => (mapData ? resolveInitialMapView(mapId, mapData) : null),
+    [mapId, mapData?.id, mapData?.center_lat, mapData?.center_lng, mapData?.zoom, mapData?.updated_at]
+  );
+
+  const center = initialMapView ? [initialMapView.lat, initialMapView.lng] : [-32.035, -52.1];
+  const zoom = initialMapView?.zoom ?? 13;
+  const municipioLabel = initialMapView?.municipioLabel ?? readMunicipioLabel(mapId) ?? '';
 
   const elementCategories = useMemo(
     () => mergeElementCategories(user?.element_categories ?? [], user?.id, elements),
@@ -900,17 +1003,98 @@ export default function MapEditor() {
     !drawingMode &&
     !editingElement;
 
+  const geometryEditingActive = !!editingElement && (!isMobile || geometryEditMode);
+  const showMobileGeometryBar = isMobile && geometryEditMode && !!editingElement;
+  const showStylePanel = !!editingElement && (!isMobile || !geometryEditMode);
+
+  const citySearchControl = mapData && !exportOpen ? (
+    <CitySearchControl
+      map={mapInstance}
+      enabled
+      className="w-full"
+      initialMunicipioLabel={municipioLabel}
+      onMunicipioSelect={handleMunicipioSelect}
+      onSuppressViewPersistenceStart={beginSuppressViewPersistence}
+      onSuppressViewPersistenceEnd={endSuppressViewPersistence}
+    />
+  ) : null;
+
+  const locateControl = mapData && !exportOpen ? (
+    <LocateMapButton
+      map={mapInstance}
+      variant="header"
+      userInteractedRef={userInteractedRef}
+      onLocated={handleMapViewChange}
+    />
+  ) : null;
+
+  const mobileActionsMenu = mapData ? (
+    <MobileEditorActionsMenu
+      onExport={handleOpenExport}
+      onMemorial={() => setMemorialOpen(true)}
+      exportDisabled={!isAuthenticated || mapAuthError}
+      exportDisabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+    />
+  ) : null;
+
+  const desktopActions = mapData ? (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-2"
+        onClick={() => setMemorialOpen(true)}
+        title="Gerar memorial descritivo"
+      >
+        <FileText className="w-4 h-4" />
+        Memorial
+      </Button>
+      <ExportEntry
+        onOpen={handleOpenExport}
+        disabled={!isAuthenticated || mapAuthError}
+        disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+      />
+    </>
+  ) : null;
+
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden overscroll-none">
-      {/* Header */}
-      <div className="bg-card border-b px-4 py-3 grid grid-cols-[1fr_minmax(12rem,28rem)_1fr] items-center gap-3 shadow-sm z-10 flex-shrink-0">
+      {/* Header mobile */}
+      {!showMobileGeometryBar ? (
+        <div className="md:hidden bg-card border-b px-4 py-3 shadow-sm z-10 flex-shrink-0 space-y-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => navigate('/')}>
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <h1 className="font-bold text-sm leading-none flex items-center gap-2 truncate">
+              {mapData?.name || 'Carregando...'}
+              {pendingCount > 0 && <Badge variant="secondary">{pendingCount}</Badge>}
+              {!isOnline() && <Badge variant="outline">Offline</Badge>}
+            </h1>
+            <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider font-semibold truncate">
+              Gerador de Mapas
+            </p>
+          </div>
+          {mobileActionsMenu}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">{citySearchControl}</div>
+          {locateControl}
+        </div>
+        </div>
+      ) : null}
+
+      {/* Header desktop */}
+      <div className="hidden md:grid grid-cols-[1fr_minmax(14rem,32rem)_1fr] items-center gap-3 bg-card border-b px-4 py-3 shadow-sm z-10 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => navigate('/')}>
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <img 
-            src="/logo.png" 
-            alt="Logo" 
+          <img
+            src="/logo.png"
+            alt="Logo"
             className="w-8 h-8 object-contain shrink-0"
           />
           <div className="min-w-0">
@@ -923,38 +1107,18 @@ export default function MapEditor() {
           </div>
         </div>
 
-        <div className="flex justify-center min-w-0">
-          {mapData && !exportOpen ? (
-            <CitySearchControl map={mapInstance} enabled className="w-full" />
-          ) : null}
+        <div className="flex justify-center items-center gap-2 min-w-0">
+          <div className="flex-1 min-w-0 max-w-md">{citySearchControl}</div>
+          {locateControl}
         </div>
 
         <div className="flex items-center justify-end gap-2 min-w-0">
-          {mapData ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => setMemorialOpen(true)}
-                title="Gerar memorial descritivo"
-              >
-                <FileText className="w-4 h-4" />
-                <span className="hidden sm:inline">Memorial</span>
-              </Button>
-              <ExportEntry
-                onOpen={handleOpenExport}
-                disabled={!isAuthenticated || mapAuthError}
-                disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
-              />
-            </>
-          ) : null}
+          {desktopActions}
         </div>
       </div>
 
       {/* Toolbar */}
-      {!exportOpen ? (
+      {!exportOpen && !showMobileGeometryBar ? (
         <MapToolbar
           activeTool={activeTool}
           onToolChange={setActiveTool}
@@ -973,13 +1137,13 @@ export default function MapEditor() {
           {drawingMode === 'gps-track' && 'Rastreamento GPS ativo'}
         </div>
       )}
-      {editingElement && !drawingMode && (
+      {editingElement && !drawingMode && !isMobile ? (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-card border px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
           {editingElement.element_type === 'point'
             ? 'Arraste o ponto para reposicionar · Salve no painel'
-            : 'Arraste os vértices para ajustar a geometria · Salve no painel'}
+            : 'Arraste os vértices ou os pontos intermediários · Salve no painel'}
         </div>
-      )}
+      ) : null}
       {pasteEnabled && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-primary text-primary-foreground px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
           Clique no mapa para colar o ponto copiado
@@ -993,6 +1157,9 @@ export default function MapEditor() {
             mapKey={mapId}
             center={center}
             zoom={zoom}
+            initialView={initialMapView}
+            suppressViewPersistenceRef={suppressViewPersistenceRef}
+            userInteractedRef={userInteractedRef}
             elements={elements}
             otherElements={otherElements}
             showOtherElements={showOtherElements}
@@ -1002,7 +1169,7 @@ export default function MapEditor() {
             onElementLongPress={handleElementLongPress}
             gpsPoints={gpsPoints}
             onMapInstance={setMapInstance}
-            editingElementId={editingElement?.id ?? null}
+            editingElementId={geometryEditingActive ? editingElement?.id ?? null : null}
             onGeometryChange={handleGeometryChange}
             pasteEnabled={pasteEnabled}
             onPasteAt={handlePasteElement}
@@ -1015,6 +1182,8 @@ export default function MapEditor() {
             basemap={basemap}
             onBasemapChange={setBasemap}
             onViewChange={handleMapViewChange}
+            showDecorativeBorder
+            showLocateControl={false}
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -1056,7 +1225,7 @@ export default function MapEditor() {
       />
 
       {/* Style Panel */}
-      {editingElement && (
+      {showStylePanel ? (
         <StylePanel
           element={editingElement}
           elementCategories={elementCategories}
@@ -1077,8 +1246,18 @@ export default function MapEditor() {
           }}
           onClose={handleStyleClose}
           onPreview={handleStylePreview}
+          isMobile={isMobile}
+          onStartGeometryEdit={handleStartGeometryEdit}
         />
-      )}
+      ) : null}
+
+      {showMobileGeometryBar ? (
+        <MobileGeometryEditBar
+          elementType={editingElement.element_type}
+          onCancel={handleCancelGeometryEdit}
+          onFinish={handleFinishGeometryEdit}
+        />
+      ) : null}
 
       {/* Context Menu */}
       <ElementContextMenu

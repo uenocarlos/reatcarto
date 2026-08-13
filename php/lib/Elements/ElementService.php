@@ -47,13 +47,16 @@ function element_is_publicly_visible(array $row): bool
  * @param array<string, mixed> $row
  * @return array<string, mixed>
  */
-function format_element_record(array $row, array $photos = []): array
+function format_element_record(array $row, array $photos = [], ?array $videos = null): array
 {
     $geojson = geojson_from_row((string) $row['geojson']);
     $style = $row['style'];
     if (is_string($style)) {
         $decodedStyle = json_decode($style, true);
         $style = is_array($decodedStyle) ? $decodedStyle : [];
+    }
+    if ($videos === null && isset($row['id'])) {
+        $videos = videos_for_element((string) $row['id']);
     }
 
     return [
@@ -71,6 +74,7 @@ function format_element_record(array $row, array $photos = []): array
         'created_at' => (string) $row['created_at'],
         'updated_at' => (string) $row['updated_at'],
         'photos' => $photos,
+        'videos' => $videos ?? [],
     ];
 }
 
@@ -79,7 +83,7 @@ function format_element_record(array $row, array $photos = []): array
  * @param array<int, array<string, mixed>> $photos
  * @return array<string, mixed>
  */
-function format_public_element_record(array $row, array $photos = []): array
+function format_public_element_record(array $row, array $photos = [], ?array $videos = null): array
 {
     $geojson = geojson_from_row((string) $row['geojson']);
     $style = $row['style'];
@@ -87,11 +91,21 @@ function format_public_element_record(array $row, array $photos = []): array
         $decodedStyle = json_decode($style, true);
         $style = is_array($decodedStyle) ? $decodedStyle : [];
     }
+    if (is_array($style) && array_key_exists('custom_icon_url', $style)) {
+        $style['custom_icon_url'] = rewrite_public_custom_icon_url($style['custom_icon_url']);
+    }
+    if ($videos === null && isset($row['id'])) {
+        $videos = videos_for_element_public((string) $row['id']);
+    }
 
     $safePhotos = array_map(static function (array $p): array {
         unset($p['owner_id'], $p['element_id']);
         return $p;
     }, $photos);
+    $safeVideos = array_map(static function (array $v): array {
+        unset($v['owner_id'], $v['element_id']);
+        return $v;
+    }, $videos ?? []);
 
     return [
         'id' => (string) $row['id'],
@@ -104,6 +118,7 @@ function format_public_element_record(array $row, array $photos = []): array
         'created_at' => (string) $row['created_at'],
         'updated_at' => (string) $row['updated_at'],
         'photos' => $safePhotos,
+        'videos' => $safeVideos,
     ];
 }
 
@@ -453,6 +468,7 @@ function elements_delete(array $user, array $input, bool $forceVersion = false):
     }
 
     photos_delete_for_element($elementId);
+    videos_delete_for_element($elementId);
     db()->prepare('DELETE FROM map_elements WHERE id = :id')->execute(['id' => $elementId]);
 
     $result = ['success' => true, 'deleted' => true];

@@ -3,8 +3,8 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function VerifyEmail() {
   const [searchParams] = useSearchParams();
@@ -63,12 +63,8 @@ export default function VerifyEmail() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-primary p-4">
-      <Card className="w-full max-w-md shadow-2xl">
-        <CardHeader>
-          <CardTitle>Verificação de email</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <AuthShell title="Verificação de email">
+        <div className="space-y-4">
           {status === 'verifying' && <p role="status">Verificando...</p>}
           {status === 'verified' && (
             <p role="status">
@@ -104,8 +100,7 @@ export default function VerifyEmail() {
               )}
             </form>
           )}
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+    </AuthShell>
   );
 }

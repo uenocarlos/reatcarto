@@ -10,16 +10,19 @@ const map = {
 };
 
 describe('cartographic collision geometry', () => {
-  it('uses a single compact scale line in location maps', () => {
-    expect(buildGraphicScaleOptions({ compact: true, maxWidth: 68 })).toMatchObject({
+  it('uses a double scale line on the main map and a single line in location maps', () => {
+    expect(buildGraphicScaleOptions({ compact: true, maxWidth: 96 })).toMatchObject({
       doubleLine: false,
       fill: 'fill',
       showSubunits: false,
       lengthUnit: 'metric',
       position: 'bottomleft',
-      maxUnitsWidth: 68,
+      labelPlacement: 'top',
+      minUnitWidth: 40,
+      maxUnitsWidth: 96,
     });
     expect(buildGraphicScaleOptions({ compact: false }).doubleLine).toBe(true);
+    expect(buildGraphicScaleOptions({ compact: false }).minUnitWidth).toBe(50);
   });
 
   it('checks map features only for the legend', () => {

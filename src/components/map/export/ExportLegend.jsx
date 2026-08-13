@@ -1,5 +1,6 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getIconSvg } from '@/components/map/iconSvgs';
+import { anchorLegendInsideBottomRight } from '@/lib/export/session';
 
 /** Resolve CSS stroke-dasharray from style dash fields. */
 function dashArrayFromStyle(dash) {
@@ -71,21 +72,37 @@ function LegendSymbol({ item }) {
 
   // point: named icon / custom url / colored circle
   const color = style.icon_color || '#F97316';
-  const iconUrl = style.custom_icon_url
-    || (style.icon_name && (String(style.icon_name).startsWith('/')
-      || String(style.icon_name).startsWith('http')
-      || String(style.icon_name).endsWith('.svg'))
-      ? style.icon_name
-      : null);
+  const customUrl = String(style.custom_icon_url ?? '').trim();
 
-  if (iconUrl) {
+  if (customUrl) {
+    return (
+      <span className="export-legend__symbol export-legend__symbol--point-bitmap" aria-hidden>
+        <img
+          src={customUrl}
+          alt=""
+          className="export-legend__symbol-img"
+          onError={(event) => {
+            event.currentTarget.style.visibility = 'hidden';
+          }}
+        />
+      </span>
+    );
+  }
+
+  const iconPathUrl = style.icon_name && (String(style.icon_name).startsWith('/')
+    || String(style.icon_name).startsWith('http')
+    || String(style.icon_name).endsWith('.svg'))
+    ? style.icon_name
+    : null;
+
+  if (iconPathUrl) {
     return (
       <span
         className="export-legend__symbol export-legend__symbol--point-icon"
         style={{
           backgroundColor: color,
-          WebkitMaskImage: `url(${iconUrl})`,
-          maskImage: `url(${iconUrl})`,
+          WebkitMaskImage: `url(${iconPathUrl})`,
+          maskImage: `url(${iconPathUrl})`,
         }}
         aria-hidden
       />
@@ -93,7 +110,8 @@ function LegendSymbol({ item }) {
   }
 
   const iconName = style.icon_name || 'pin';
-  const svg = getIconSvg(iconName, color);
+  // Legend keeps a fixed readable size (CSS 24px) — does not follow map zoom.
+  const svg = getIconSvg(iconName, color, 24);
   if (svg) {
     return (
       <span
@@ -122,11 +140,11 @@ const RESIZE_HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
  */
 export default function ExportLegend({
   items = [],
-  legendPosition = 'inside',
+  legendPosition = 'right',
   legendColumns = 1,
   legendFontPx = 12,
   legendSpacing = 'normal',
-  legendInside = { xPct: 5, yPct: 5, wPct: 30, hPct: 40 },
+  legendInside = { xPct: 51, yPct: 57, wPct: 46, hPct: 40 },
   legendRightWidthPct = 25,
   onLegendInsideChange,
   onLegendRightWidthChange,
@@ -143,10 +161,11 @@ export default function ExportLegend({
   const effectiveInside = liveInside || legendInside;
   const effectiveRightWidth = liveRightWidth ?? legendRightWidthPct;
 
-  const interactive = legendPosition === 'inside' || legendPosition === 'right';
+  const fitContent = legendPosition === 'right';
+  const interactive = legendPosition === 'inside' || (legendPosition === 'right' && !fitContent);
   const canMove = legendPosition === 'inside' && Boolean(onLegendInsideChange);
   const canResizeInside = legendPosition === 'inside' && Boolean(onLegendInsideChange);
-  const canResizeRight = legendPosition === 'right' && Boolean(onLegendRightWidthChange);
+  const canResizeRight = legendPosition === 'right' && !fitContent && Boolean(onLegendRightWidthChange);
   const positionClass = `export-legend--${legendPosition}`;
 
   /** Each chosen column keeps enough room for its symbol and wrapped label. */
@@ -154,17 +173,24 @@ export default function ExportLegend({
 
   const layoutStyle = useMemo(() => {
     if (legendPosition === 'inside') {
+      const rightPct = Math.max(0, 100 - effectiveInside.xPct - effectiveInside.wPct);
+      const bottomPct = Math.max(0, 100 - effectiveInside.yPct - effectiveInside.hPct);
       return {
-        left: `${effectiveInside.xPct}%`,
-        top: `${effectiveInside.yPct}%`,
+        left: 'auto',
+        top: 'auto',
+        right: `${rightPct}%`,
+        bottom: `${bottomPct}%`,
         width: `${effectiveInside.wPct}%`,
         minHeight: `${effectiveInside.hPct}%`,
         height: 'auto',
-        maxHeight: '92%',
+        maxHeight: `calc(100% - ${bottomPct}% - 1%)`,
         fontSize: `${legendFontPx}px`,
       };
     }
     if (legendPosition === 'right') {
+      if (fitContent) {
+        return { fontSize: `${legendFontPx}px` };
+      }
       return {
         width: `${effectiveRightWidth}%`,
         minWidth: `${rightMinPx}px`,
@@ -175,9 +201,65 @@ export default function ExportLegend({
   }, [
     effectiveInside,
     effectiveRightWidth,
+    fitContent,
     legendFontPx,
     legendPosition,
     rightMinPx,
+  ]);
+
+  // After paint: sync stored size to real content and keep the box fully on-map.
+  useLayoutEffect(() => {
+    if (legendPosition !== 'inside' || !onLegendInsideChange || liveInside) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const host = el.closest('.export-composition__main-map-cell')
+      || el.closest('.export-composition__main-map-region')
+      || el.closest('.export-composition__body');
+    if (!host) return;
+
+    const hostH = host.getBoundingClientRect().height || 1;
+    const hostW = host.getBoundingClientRect().width || 1;
+    const rect = el.getBoundingClientRect();
+    const actualHPct = (rect.height / hostH) * 100;
+    const actualWPct = (rect.width / hostW) * 100;
+    const marginPct = 3;
+    const wPct = Math.max(legendInside.wPct, Math.ceil(actualWPct));
+    const hPct = Math.max(legendInside.hPct, Math.ceil(actualHPct));
+    let xPct = legendInside.xPct;
+    let yPct = legendInside.yPct;
+
+    // Near the default corner (or overflowing): pin bottom-right so the full legend shows.
+    const nearBottomRight =
+      legendInside.xPct + legendInside.wPct >= 90
+      && legendInside.yPct + legendInside.hPct >= 90;
+    const overflows =
+      legendInside.yPct + hPct > 100 - marginPct + 0.5
+      || legendInside.xPct + wPct > 100 - marginPct + 0.5;
+
+    if (nearBottomRight || overflows) {
+      const anchored = anchorLegendInsideBottomRight({ wPct, hPct }, { marginPct });
+      xPct = anchored.xPct;
+      yPct = anchored.yPct;
+    }
+
+    if (
+      Math.abs(xPct - legendInside.xPct) < 0.5
+      && Math.abs(yPct - legendInside.yPct) < 0.5
+      && Math.abs(wPct - legendInside.wPct) < 0.5
+      && Math.abs(hPct - legendInside.hPct) < 0.5
+    ) {
+      return;
+    }
+    onLegendInsideChange({ xPct, yPct, wPct, hPct });
+  }, [
+    items,
+    legendColumns,
+    legendFontPx,
+    legendInside,
+    legendPosition,
+    legendSpacing,
+    liveInside,
+    onLegendInsideChange,
   ]);
 
   const hostMetrics = useCallback(() => {
@@ -206,12 +288,16 @@ export default function ExportLegend({
     setLiveInside(clamped);
     const el = rootRef.current;
     if (el) {
-      el.style.left = `${clamped.xPct}%`;
-      el.style.top = `${clamped.yPct}%`;
+      const rightPct = Math.max(0, 100 - clamped.xPct - clamped.wPct);
+      const bottomPct = Math.max(0, 100 - clamped.yPct - clamped.hPct);
+      el.style.left = 'auto';
+      el.style.top = 'auto';
+      el.style.right = `${rightPct}%`;
+      el.style.bottom = `${bottomPct}%`;
       el.style.width = `${clamped.wPct}%`;
       el.style.minHeight = `${clamped.hPct}%`;
       el.style.height = 'auto';
-      el.style.maxHeight = '92%';
+      el.style.maxHeight = `calc(100% - ${bottomPct}% - 1%)`;
     }
     return clamped;
   }, [clampInside]);
@@ -335,6 +421,7 @@ export default function ExportLegend({
         'export-legend',
         positionClass,
         `export-legend--spacing-${legendSpacing}`,
+        fitContent ? 'export-legend--fit-content' : '',
         interactive ? 'export-legend--interactive' : 'export-legend--static',
         liveInside || liveRightWidth != null ? 'export-legend--live' : '',
       ].filter(Boolean).join(' ')}
@@ -375,7 +462,7 @@ export default function ExportLegend({
         />
       ) : null}
 
-      {showMetricControls && legendPosition === 'right' ? (
+      {showMetricControls && legendPosition === 'right' && !fitContent ? (
         <label className="export-legend__metric-control" hidden>
           Largura (%)
           <input
@@ -391,7 +478,11 @@ export default function ExportLegend({
 
       <div
         className="export-legend__items"
-        style={{ gridTemplateColumns: `repeat(${legendColumns}, minmax(0, 1fr))` }}
+        style={{
+          gridTemplateColumns: fitContent
+            ? `repeat(${Math.max(1, legendColumns)}, max-content)`
+            : `repeat(${legendColumns}, minmax(0, 1fr))`,
+        }}
       >
         {displayItems.map((item) => {
           if (item.symbolKind === 'topic') {

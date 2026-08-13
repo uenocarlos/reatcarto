@@ -22,6 +22,19 @@ function resolvePhotos(element) {
   return [];
 }
 
+function resolveVideos(element) {
+  if (element?.videos?.length) {
+    return element.videos.map((v) => ({
+      id: v.id,
+      url: v.url || api.media.videoUrl?.(v.id) || `/php/videos/get.php?id=${encodeURIComponent(v.id)}`,
+    }));
+  }
+  if (element?.video_urls?.length) {
+    return element.video_urls.map((url, i) => ({ id: `url-${i}`, url }));
+  }
+  return [];
+}
+
 function MonthCalendarStrip({ monthStart, monthEnd }) {
   const active = monthsInRange(monthStart, monthEnd);
   return (
@@ -78,10 +91,11 @@ export default function ElementPopup({ element }) {
   const name = (element.name || '').trim();
   const description = (element.description || '').trim();
   const photos = resolvePhotos(element);
+  const videos = resolveVideos(element);
   const { isPesqueiro, pescarias } = parsePesqueiroFromStyle(element.style);
   const showPesqueiro = isPesqueiro && pescarias.length > 0;
 
-  if (!name && !description && photos.length === 0 && !showPesqueiro) return null;
+  if (!name && !description && photos.length === 0 && videos.length === 0 && !showPesqueiro) return null;
 
   return (
     <Popup className="element-popup" maxWidth={280} minWidth={180}>
@@ -126,6 +140,25 @@ export default function ElementPopup({ element }) {
             ) : null}
           </div>
         ) : null}
+        {videos.length > 0 ? (
+          <div className="flex flex-col gap-1.5 pt-0.5">
+            {videos.slice(0, 2).map((video) => (
+              <video
+                key={video.id}
+                src={video.url}
+                controls
+                preload="metadata"
+                playsInline
+                className="w-full max-h-36 rounded-md border border-border bg-muted"
+              />
+            ))}
+            {videos.length > 2 ? (
+              <span className="text-[10px] text-muted-foreground">
+                +{videos.length - 2} vídeo(s)
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </Popup>
   );
@@ -136,6 +169,7 @@ export function elementHasPopupContent(element) {
   if ((element.name || '').trim()) return true;
   if ((element.description || '').trim()) return true;
   if (element.photos?.length || element.photo_urls?.length) return true;
+  if (element.videos?.length || element.video_urls?.length) return true;
   const { isPesqueiro, pescarias } = parsePesqueiroFromStyle(element?.style);
   if (isPesqueiro && pescarias.length > 0) return true;
   return false;

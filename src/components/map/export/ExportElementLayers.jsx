@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import L from 'leaflet';
-import { Marker, Polyline, Polygon } from 'react-leaflet';
+import { Marker, Polyline, Polygon, useMap, useMapEvents } from 'react-leaflet';
 import {
   createColoredIcon,
   getDashArray,
+  iconSizeForZoom,
   parseElementGeojson,
   parseElementStyle,
   visibleElements,
@@ -33,7 +34,22 @@ function ElementLabel({ position, text }) {
   );
 }
 
-export default function ExportElementLayers({ elements = [], hiddenIds, showLabels = false }) {
+export default function ExportElementLayers({ elements = [], hiddenIds, showLabels = false, zoom }) {
+  const map = useMap();
+  const [pointIconSize, setPointIconSize] = useState(() => iconSizeForZoom(zoom ?? map.getZoom()));
+
+  useEffect(() => {
+    const next = iconSizeForZoom(zoom ?? map.getZoom());
+    setPointIconSize((prev) => (prev === next ? prev : next));
+  }, [zoom, map]);
+
+  useMapEvents({
+    zoomend: () => {
+      const next = iconSizeForZoom(map.getZoom());
+      setPointIconSize((prev) => (prev === next ? prev : next));
+    },
+  });
+
   const visible = useMemo(
     () => visibleElements(elements, hiddenIds),
     [elements, hiddenIds],
@@ -54,9 +70,13 @@ export default function ExportElementLayers({ elements = [], hiddenIds, showLabe
             style.icon_color || '#F97316',
             style.icon_name,
             style.custom_icon_url || el.custom_icon_url,
+            {
+              size: pointIconSize,
+              className: 'export-map-feature export-map-feature--point',
+            },
           );
           return (
-            <React.Fragment key={el.id}>
+            <React.Fragment key={`${el.id}-s${pointIconSize}`}>
               <Marker position={position} icon={icon} interactive={false} />
               {showLabels && label ? <ElementLabel position={position} text={label} /> : null}
             </React.Fragment>

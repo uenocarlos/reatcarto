@@ -7,9 +7,11 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { RefreshCw } from 'lucide-react';
+import { Eye, RefreshCw } from 'lucide-react';
 import CompositionPreview from '@/components/map/export/CompositionPreview';
 import ExportControlsPanel from '@/components/map/export/ExportControlsPanel';
+import MobileExportPreviewOverlay from '@/components/map/export/MobileExportPreviewOverlay';
+import { useIsMobile } from '@/hooks/use-mobile';
 import {
   assertExportTitle,
   createDefaultExportSession,
@@ -33,6 +35,7 @@ function loadDefaultGenerateDeps() {
 }
 
 const EMPTY_TITLE_MESSAGE = 'Informe um título para exportar o mapa.';
+const MOBILE_PREVIEW_ROOT_TEST_ID = 'export-mobile-preview-root';
 
 const GENERATION_ERROR_MESSAGES = {
   memory: 'Falha na exportação por memória insuficiente. Tente reduzir o DPI ou simplificar o layout.',
@@ -41,6 +44,13 @@ const GENERATION_ERROR_MESSAGES = {
   validation: EMPTY_TITLE_MESSAGE,
   aborted: '',
 };
+
+function normalizeLegendPosition(session) {
+  if (session?.legendPosition === 'inside') {
+    return { ...session, legendPosition: 'right' };
+  }
+  return session;
+}
 
 /**
  * Ephemeral export composition shell (ADR-003, ADR-010, ADR-008).
@@ -53,15 +63,18 @@ export default function ExportMapShell({
   fetchFn,
   geoFeaturesOverride,
 }) {
+  const isMobile = useIsMobile();
   const compositionRef = useRef(null);
+  const mobileCaptureRef = useRef(null);
   const previewSyncRef = useRef(null);
   const abortRef = useRef(null);
   const generatingRef = useRef(false);
 
-  const [draftSession, setDraftSession] = useState(() => createDefaultExportSession(snapshot));
-  const [previewSession, setPreviewSession] = useState(() => createDefaultExportSession(snapshot));
+  const [draftSession, setDraftSession] = useState(() => normalizeLegendPosition(createDefaultExportSession(snapshot)));
+  const [previewSession, setPreviewSession] = useState(() => normalizeLegendPosition(createDefaultExportSession(snapshot)));
   const [titleError, setTitleError] = useState(null);
   const [generationError, setGenerationError] = useState(null);
+  const [mobilePreviewOpen, setMobilePreviewOpen] = useState(false);
 
   useEffect(() => {
     previewSyncRef.current = createPreviewSync((value) => {
@@ -76,6 +89,19 @@ export default function ExportMapShell({
   useEffect(() => {
     if (open && !generateDeps) loadDefaultGenerateDeps().catch(() => {});
   }, [generateDeps, open]);
+
+  useEffect(() => {
+    if (!open) {
+      setMobilePreviewOpen(false);
+      setGenerationError(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftSession((prev) => normalizeLegendPosition(prev));
+    setPreviewSession((prev) => normalizeLegendPosition(prev));
+  }, [open]);
 
   const updateSession = useCallback((updater) => {
     setDraftSession((prev) => {
@@ -95,8 +121,22 @@ export default function ExportMapShell({
     abortRef.current?.abort();
     abortRef.current = null;
     generatingRef.current = false;
+    setMobilePreviewOpen(false);
     onOpenChange(false);
   }, [onOpenChange]);
+
+  const handleOpenMobilePreview = useCallback(() => {
+    const titleCheck = assertExportTitle(draftSession.title);
+    if (!titleCheck.ok) {
+      setTitleError(EMPTY_TITLE_MESSAGE);
+      return;
+    }
+    setTitleError(null);
+    setGenerationError(null);
+    previewSyncRef.current?.flushPreviewSync();
+    setPreviewSession(normalizeLegendPosition(draftSession));
+    setMobilePreviewOpen(true);
+  }, [draftSession]);
 
   const handleExport = useCallback(async () => {
     if (generatingRef.current) return;
@@ -110,9 +150,14 @@ export default function ExportMapShell({
     setGenerationError(null);
 
     previewSyncRef.current?.flushPreviewSync();
-    setPreviewSession(draftSession);
+    const exportSession = isMobile ? normalizeLegendPosition(previewSession) : draftSession;
+    if (!isMobile) {
+      setPreviewSession(draftSession);
+    }
 
-    const compositionEl = compositionRef.current?.querySelector('[data-testid="export-composition-root"]');
+    const compositionEl = isMobile
+      ? mobileCaptureRef.current?.querySelector(`[data-testid="${MOBILE_PREVIEW_ROOT_TEST_ID}"]`)
+      : compositionRef.current?.querySelector('[data-testid="export-composition-root"]');
     if (!compositionEl) {
       setGenerationError(GENERATION_ERROR_MESSAGES.capture);
       return;
@@ -129,15 +174,18 @@ export default function ExportMapShell({
       await generateExport(
         {
           compositionEl,
-          format: draftSession.format,
-          dpi: draftSession.dpi,
-          paper: draftSession.paper,
-          orientation: draftSession.orientation,
-          fileTitle: draftSession.title,
+          format: exportSession.format,
+          dpi: exportSession.dpi,
+          paper: exportSession.paper,
+          orientation: exportSession.orientation,
+          fileTitle: exportSession.title,
           signal: controller.signal,
         },
         resolvedGenerateDeps,
       );
+      if (isMobile) {
+        setMobilePreviewOpen(false);
+      }
     } catch (error) {
       if (error?.code !== 'aborted') {
         const message = GENERATION_ERROR_MESSAGES[error?.code] || GENERATION_ERROR_MESSAGES.capture;
@@ -148,10 +196,9 @@ export default function ExportMapShell({
       abortRef.current = null;
       setDraftSession((prev) => ({ ...prev, isGenerating: false }));
     }
-  }, [draftSession, generateDeps]);
+  }, [draftSession, previewSession, generateDeps, isMobile]);
 
   const handleLegendInsideChange = useCallback((metrics) => {
-    // Commit layout immediately to preview (bypass debounce) so drag stays fluid.
     setDraftSession((prev) => {
       const next = setLegendInside(prev, metrics);
       setPreviewSession(next);
@@ -198,6 +245,30 @@ export default function ExportMapShell({
     }));
   }, [updateSession]);
 
+  const handleMobileViewChange = useCallback((view) => {
+    const patch = (prev) => ({
+      ...prev,
+      center: view.center ?? prev.center,
+      zoom: view.zoom ?? prev.zoom,
+    });
+    setDraftSession(patch);
+    setPreviewSession(patch);
+  }, []);
+
+  const mobilePreviewSession = normalizeLegendPosition(previewSession);
+
+  const sharedPreviewProps = {
+    session: previewSession,
+    onLegendInsideChange: handleLegendInsideChange,
+    onLegendRightWidthChange: handleLegendRightWidthChange,
+    onLegendItemOrderChange: handleLegendItemOrderChange,
+    onChromeChange: handleChromeChange,
+    onGeoLoadError: handleGeoLoadError,
+    onViewChange: handleViewChange,
+    fetchFn,
+    geoFeaturesOverride,
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
@@ -210,53 +281,66 @@ export default function ExportMapShell({
           <DialogDescription className="sr-only">
             Configure a composicao cartografica, revise a previa e baixe o mapa em PNG ou PDF.
           </DialogDescription>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={handleRefreshPreview}
-            data-testid="export-preview-refresh"
-          >
-            <RefreshCw className="w-4 h-4 mr-1" />
-            Atualizar prévia
-          </Button>
+          {!isMobile ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleRefreshPreview}
+              data-testid="export-preview-refresh"
+            >
+              <RefreshCw className="w-4 h-4 mr-1" />
+              Atualizar prévia
+            </Button>
+          ) : null}
         </DialogHeader>
 
-        <div className="export-shell__body">
+        <div className={`export-shell__body${isMobile ? ' export-shell__body--mobile' : ''}`}>
           <aside className="export-shell__controls">
             <ExportControlsPanel
               session={draftSession}
               onSessionChange={updateSession}
               titleError={titleError}
+              isMobile={isMobile}
             />
           </aside>
 
-          <div className="export-shell__preview" data-testid="export-preview-panel">
-            <div className="export-shell__preview-inner" ref={compositionRef}>
-              <CompositionPreview
-                session={previewSession}
-                onLegendInsideChange={handleLegendInsideChange}
-                onLegendRightWidthChange={handleLegendRightWidthChange}
-                onLegendItemOrderChange={handleLegendItemOrderChange}
-                onChromeChange={handleChromeChange}
-                onGeoLoadError={handleGeoLoadError}
-                onViewChange={handleViewChange}
-                fetchFn={fetchFn}
-                geoFeaturesOverride={geoFeaturesOverride}
-                showMetricControls
-              />
+          {!isMobile ? (
+            <div className="export-shell__preview" data-testid="export-preview-panel">
+              <div className="export-shell__preview-inner" ref={compositionRef}>
+                <CompositionPreview
+                  {...sharedPreviewProps}
+                  showMetricControls
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
+
+        {isMobile && mobilePreviewOpen ? (
+          <MobileExportPreviewOverlay
+            session={mobilePreviewSession}
+            captureRef={mobileCaptureRef}
+            onClose={() => {
+              if (!draftSession.isGenerating) setMobilePreviewOpen(false);
+            }}
+            onExport={handleExport}
+            onViewChange={handleMobileViewChange}
+            isGenerating={draftSession.isGenerating}
+            generationError={generationError}
+            fetchFn={fetchFn}
+            geoFeaturesOverride={geoFeaturesOverride}
+          />
+        ) : null}
 
         <div className="export-shell__footer">
           <div className="flex flex-col gap-1 min-w-0">
-            {draftSession.isGenerating ? (
+            {!isMobile && draftSession.isGenerating ? (
               <span className="export-shell__progress" data-testid="export-progress">
                 Gerando arquivo…
               </span>
             ) : null}
-            {generationError ? (
+            {!isMobile && generationError ? (
               <span className="export-shell__error" data-testid="export-generation-error" role="alert">
                 {generationError}
               </span>
@@ -271,14 +355,26 @@ export default function ExportMapShell({
             >
               Cancelar
             </Button>
-            <Button
-              type="button"
-              onClick={handleExport}
-              disabled={draftSession.isGenerating}
-              data-testid="export-download-button"
-            >
-              Exportar
-            </Button>
+            {isMobile ? (
+              <Button
+                type="button"
+                onClick={handleOpenMobilePreview}
+                disabled={draftSession.isGenerating}
+                data-testid="export-mobile-view-button"
+              >
+                <Eye className="w-4 h-4 mr-2" />
+                Visualizar/Exportar
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                onClick={handleExport}
+                disabled={draftSession.isGenerating}
+                data-testid="export-download-button"
+              >
+                Exportar
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>
@@ -286,4 +382,4 @@ export default function ExportMapShell({
   );
 }
 
-export { EMPTY_TITLE_MESSAGE, GENERATION_ERROR_MESSAGES };
+export { EMPTY_TITLE_MESSAGE, GENERATION_ERROR_MESSAGES, MOBILE_PREVIEW_ROOT_TEST_ID };

@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '@/lib/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Download, CloudOff } from 'lucide-react';
 import { toast } from 'sonner';
@@ -15,15 +14,14 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { MapPin, Plus, Pencil, Trash2, Map as MapIcon, LogOut, FolderOpen, Layers, Navigation, Globe, Eye, EyeOff } from 'lucide-react';
+import { MapPin, Plus, Pencil, Trash2, Map as MapIcon, FolderOpen, Layers, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { format } from 'date-fns';
 import LeafletMap from '@/components/map/LeafletMap';
+import AppShell, { IDENTITY_CARD_CLASS } from '@/components/layout/AppShell';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { logout, confirmLogoutDiscard, logoutState } = useAuth();
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [preparedMapIds, setPreparedMapIds] = useState([]);
   const [offlineMode] = useState(() => !isOnline());
   const [showCreate, setShowCreate] = useState(false);
@@ -31,7 +29,6 @@ export default function Dashboard() {
   const [publishMap, setPublishMap] = useState(null);
   const [publishConfirmEmpty, setPublishConfirmEmpty] = useState(false);
   const [formData, setFormData] = useState({ name: '', description: '' });
-  const [user, setUser] = useState(null);
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
 
   const { data: maps = [], isLoading } = useQuery({
@@ -40,7 +37,6 @@ export default function Dashboard() {
   });
 
   React.useEffect(() => {
-    api.auth.me().then(setUser).catch(() => {});
     api.offline.listPreparedMaps().then((prepared) => setPreparedMapIds(prepared.map((m) => m.id))).catch(() => {});
   }, [maps.length]);
 
@@ -118,13 +114,6 @@ export default function Dashboard() {
     updateMutation.mutate({ id: editMap.id, data });
   };
 
-  const handleLogout = async () => {
-    const result = await logout();
-    if (result?.needsDiscardConfirm) {
-      setShowDiscardConfirm(true);
-    }
-  };
-
   const handlePrepareOffline = async (mapId, e) => {
     e?.stopPropagation?.();
     try {
@@ -142,87 +131,31 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-background font-inter">
-      {/* Header */}
-      <div className="bg-primary">
-        <div className="max-w-6xl mx-auto px-4 py-8 sm:py-12">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <img 
-                src="/logo.png" 
-                alt="Logo" 
-                className="w-12 h-12 object-contain bg-white/20 p-1 rounded-lg"
-              />
-              <div>
-                <p className="text-primary-foreground/80 text-sm">Bem vindo,</p>
-                <h1 className="text-2xl sm:text-3xl font-bold text-primary-foreground">
-                  {user?.full_name || 'Usuário'}!
-                </h1>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-primary-foreground hover:bg-primary-foreground/20 gap-2"
-                onClick={() => navigate('/gallery')}
-              >
-                <Globe className="w-5 h-5" />
-                <span className="hidden sm:inline">Galeria</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`text-primary-foreground hover:bg-primary-foreground/20 gap-2 ${viewMode === 'map' ? 'bg-primary-foreground/20' : ''}`}
-                onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')}
-              >
-                {viewMode === 'list' ? <MapIcon className="w-5 h-5" /> : <Layers className="w-5 h-5" />}
-                <span>{viewMode === 'list' ? 'Ver Mapa' : 'Ver Lista'}</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-primary-foreground hover:bg-primary-foreground/20 gap-2"
-                asChild
-              >
-                <Link to="/profile">Perfil</Link>
-              </Button>
-              {user?.role === 'admin' && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-primary-foreground hover:bg-primary-foreground/20 gap-2"
-                  asChild
-                >
-                  <Link to="/admin/users">Admin</Link>
-                </Button>
-              )}
-              <div className="w-px h-8 bg-primary-foreground/20 mx-1" />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-primary-foreground hover:bg-primary-foreground/20"
-                onClick={handleLogout}
-              >
-                <LogOut className="w-5 h-5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-w-6xl mx-auto px-4 py-8">
+    <AppShell
+      showHomeLink={false}
+      title={viewMode === 'list' ? 'Meus Mapas' : undefined}
+      headerActions={
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`text-primary-foreground hover:bg-primary-foreground/20 gap-2 ${viewMode === 'map' ? 'bg-primary-foreground/20' : ''}`}
+          onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')}
+        >
+          {viewMode === 'list' ? <MapIcon className="w-5 h-5" /> : <Layers className="w-5 h-5" />}
+          <span>{viewMode === 'list' ? 'Ver Mapa' : 'Ver Lista'}</span>
+        </Button>
+      }
+      actions={
+        viewMode === 'list' ? (
+          <Button onClick={() => { setFormData({ name: '', description: '' }); setShowCreate(true); }} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Criar Novo Mapa
+          </Button>
+        ) : null
+      }
+    >
         {viewMode === 'list' ? (
           <>
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-semibold text-foreground">Meus Mapas</h2>
-              <Button onClick={() => { setFormData({ name: '', description: '' }); setShowCreate(true); }} className="gap-2">
-                <Plus className="w-4 h-4" />
-                Criar Novo Mapa
-              </Button>
-            </div>
-
             {isLoading ? (
               <div className="flex justify-center py-20">
                 <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -250,7 +183,7 @@ export default function Dashboard() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {maps.map((map) => (
-                  <Card key={map.id} className="group hover:shadow-lg transition-all duration-200 cursor-pointer border-l-4 border-l-primary">
+                  <Card key={map.id} className={`group hover:shadow-lg transition-all duration-200 cursor-pointer ${IDENTITY_CARD_CLASS}`}>
                     <CardContent className="p-5">
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0" onClick={() => navigate(`/editor/${map.id}`)}>
@@ -345,13 +278,24 @@ export default function Dashboard() {
               onNewElement={() => {}}
               onElementLongPress={() => {}}
             />
-            <div className="absolute top-4 left-4 z-[1000] bg-card/90 backdrop-blur-sm p-3 rounded-lg border shadow-lg max-w-[200px]">
-              <h3 className="text-xs font-bold uppercase text-muted-foreground mb-2">Mapa Principal</h3>
-              <p className="text-[10px] text-muted-foreground">Exibindo todos os elementos de todos os seus mapas.</p>
+            <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 max-w-[220px]">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="gap-2 shadow-lg w-fit bg-card/95 backdrop-blur-sm"
+                onClick={() => setViewMode('list')}
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Voltar à lista
+              </Button>
+              <div className="bg-card/90 backdrop-blur-sm p-3 rounded-lg border shadow-lg">
+                <h3 className="text-xs font-bold uppercase text-muted-foreground mb-2">Mapa Principal</h3>
+                <p className="text-[10px] text-muted-foreground">Exibindo todos os elementos de todos os seus mapas.</p>
+              </div>
             </div>
           </div>
         )}
-      </div>
 
       {/* Create Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
@@ -433,28 +377,6 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDiscardConfirm} onOpenChange={setShowDiscardConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Descartar alterações pendentes?</DialogTitle>
-            <DialogDescription>
-              Existem alterações que ainda não foram sincronizadas. Descartá-las removerá permanentemente esse trabalho local.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDiscardConfirm(false)}>Cancelar</Button>
-            <Button
-              variant="destructive"
-              onClick={async () => {
-                await confirmLogoutDiscard();
-                setShowDiscardConfirm(false);
-              }}
-            >
-              Descartar e sair
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+    </AppShell>
   );
 }

@@ -69,6 +69,7 @@ function normalizeElement(element) {
   const geojson =
     typeof element.geojson === 'string' ? element.geojson : JSON.stringify(element.geojson ?? {});
   const photos = element.photos ?? [];
+  const videos = element.videos ?? [];
   return {
     ...element,
     style,
@@ -76,6 +77,8 @@ function normalizeElement(element) {
     is_publicly_visible: element.is_publicly_visible !== false && element.is_publicly_visible !== 0,
     photo_urls: photos.map((p) => p.url || `/php/photos/get.php?id=${encodeURIComponent(p.id)}`),
     photos,
+    video_urls: videos.map((v) => v.url || `/php/videos/get.php?id=${encodeURIComponent(v.id)}`),
+    videos,
   };
 }
 
@@ -341,7 +344,45 @@ export const api = {
       },
     },
   },
+  icons: {
+    list: async () => {
+      if (!isOnline()) {
+        throw new ApiError('offline', 'A biblioteca de ícones requer conexão com a internet.', 0);
+      }
+      const data = await apiFetch('/icons/list.php', { method: 'GET' });
+      return data.icons ?? [];
+    },
+    create: async (file, { name, clientMutationId } = {}, mutationId = newMutationIdInternal()) => {
+      if (!isOnline()) {
+        throw new ApiError('offline', 'A biblioteca de ícones requer conexão com a internet.', 0);
+      }
+      const form = new FormData();
+      form.append('file', file);
+      if (name != null && String(name).trim() !== '') {
+        form.append('name', String(name).trim());
+      }
+      form.append('client_mutation_id', clientMutationId ?? mutationId);
+      const data = await apiFetch('/icons/upload.php', { method: 'POST', body: form });
+      return data.icon;
+    },
+    remove: async (id) => {
+      if (!isOnline()) {
+        throw new ApiError('offline', 'A biblioteca de ícones requer conexão com a internet.', 0);
+      }
+      return apiFetch('/icons/remove.php', { method: 'POST', body: { id } });
+    },
+    url: (id) => `/php/icons/get.php?id=${encodeURIComponent(id)}`,
+  },
   media: {
+    listPhotos: async ({ page = 1, pageSize } = {}) => {
+      const params = new URLSearchParams({ page: String(page) });
+      if (pageSize != null) params.set('page_size', String(pageSize));
+      const data = await apiFetch(`/photos/list.php?${params.toString()}`, { method: 'GET' });
+      return {
+        photos: data.photos ?? [],
+        pagination: data.pagination ?? { page: 1, page_size: 50, total: 0, total_pages: 0 },
+      };
+    },
     upload: async (elementId, file, clientMutationId = newMutationIdInternal(), dependsOn = null) => {
       if (!isOnline()) {
         return offlineQueuePhotoUpload(elementId, file, dependsOn, clientMutationId);
@@ -359,6 +400,32 @@ export const api = {
       return apiFetch('/photos/delete.php', { method: 'DELETE', body });
     },
     url: (photoId) => `${API_BASE_URL}/photos/get.php?id=${encodeURIComponent(photoId)}`,
+    listVideos: async ({ page = 1, pageSize } = {}) => {
+      const params = new URLSearchParams({ page: String(page) });
+      if (pageSize != null) params.set('page_size', String(pageSize));
+      const data = await apiFetch(`/videos/list.php?${params.toString()}`, { method: 'GET' });
+      return {
+        videos: data.videos ?? [],
+        pagination: data.pagination ?? { page: 1, page_size: 50, total: 0, total_pages: 0 },
+      };
+    },
+    uploadVideo: async (elementId, file, clientMutationId = newMutationIdInternal()) => {
+      if (!isOnline()) {
+        throw new ApiError('offline', 'O envio de vídeos requer conexão com a internet.', 0);
+      }
+      const form = new FormData();
+      form.append('element_id', elementId);
+      form.append('client_mutation_id', clientMutationId);
+      form.append('file', file);
+      const data = await apiFetch('/videos/upload.php', { method: 'POST', body: form });
+      return data.video;
+    },
+    deleteVideo: async (videoId, baseVersion, clientMutationId = newMutationIdInternal()) => {
+      const body = { id: videoId, client_mutation_id: clientMutationId };
+      if (baseVersion != null) body.base_version = baseVersion;
+      return apiFetch('/videos/delete.php', { method: 'DELETE', body });
+    },
+    videoUrl: (videoId) => `${API_BASE_URL}/videos/get.php?id=${encodeURIComponent(videoId)}`,
   },
   sync: {
     push: async (mutations, options = {}) => {

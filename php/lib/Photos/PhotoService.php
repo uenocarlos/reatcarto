@@ -85,6 +85,67 @@ function photo_can_read(?array $user, array $photo): bool
 }
 
 /**
+ * @return array{photos: list<array<string, mixed>>, pagination: array<string, int>}
+ */
+function photos_list_for_user(array $user, int $page = 1, int $pageSize = DEFAULT_PAGE_SIZE): array
+{
+    $page = max(1, $page);
+    $pageSize = min(MAX_PAGE_SIZE, max(1, $pageSize));
+    $offset = ($page - 1) * $pageSize;
+
+    $countStmt = db()->prepare(
+        'SELECT COUNT(*) FROM photos p
+         JOIN map_elements e ON e.id = p.element_id
+         JOIN maps m ON m.id = e.map_id
+         WHERE m.owner_id = :user_id'
+    );
+    $countStmt->execute(['user_id' => $user['id']]);
+    $total = (int) $countStmt->fetchColumn();
+
+    $stmt = db()->prepare(
+        'SELECT p.id, p.content_type, p.byte_size, p.version, p.created_at, p.element_id,
+                e.name AS element_name, e.map_id, m.name AS map_name
+         FROM photos p
+         JOIN map_elements e ON e.id = p.element_id
+         JOIN maps m ON m.id = e.map_id
+         WHERE m.owner_id = :user_id
+         ORDER BY p.created_at DESC
+         LIMIT :limit OFFSET :offset'
+    );
+    $stmt->bindValue(':user_id', $user['id']);
+    $stmt->bindValue(':limit', $pageSize, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+
+    $photos = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $id = (string) $row['id'];
+        $photos[] = [
+            'id' => $id,
+            'content_type' => (string) $row['content_type'],
+            'byte_size' => (int) $row['byte_size'],
+            'version' => (int) $row['version'],
+            'created_at' => (string) $row['created_at'],
+            'url' => '/php/photos/get.php?id=' . urlencode($id),
+            'element_id' => (string) $row['element_id'],
+            'element_name' => (string) $row['element_name'],
+            'map_id' => (string) $row['map_id'],
+            'map_name' => (string) $row['map_name'],
+        ];
+    }
+
+    return [
+        'photos' => $photos,
+        'pagination' => [
+            'page' => $page,
+            'page_size' => $pageSize,
+            'total' => $total,
+            'total_pages' => $pageSize > 0 ? (int) ceil($total / $pageSize) : 0,
+        ],
+    ];
+}
+
+/**
  * @return list<array<string, mixed>>
  */
 function photos_for_element_public(string $elementId): array

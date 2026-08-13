@@ -89,6 +89,7 @@ function hard_delete_user(string $userId): void
 function delete_user_and_data(string $userId): void
 {
     photos_delete_for_user($userId);
+    videos_delete_for_user($userId);
     db()->prepare('DELETE FROM maps WHERE owner_id = :id')->execute(['id' => $userId]);
     revoke_all_user_sessions($userId);
     db()->prepare('DELETE FROM users WHERE id = :id')->execute(['id' => $userId]);

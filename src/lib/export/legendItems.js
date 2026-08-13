@@ -2,7 +2,13 @@ import { buildCategoryIndex } from '../elementCategories.js';
 import {
   buildTypeGroups,
   categoryBucket,
+  TYPE_ORDER,
 } from './layerGrouping.js';
+import {
+  DEFAULT_LEGEND_COLUMNS,
+  LEGEND_COLUMNS_MAX,
+  LEGEND_COLUMNS_MIN,
+} from './constants.js';
 
 /**
  * @typedef {'point'|'line'|'polygon'|'region'|'topic'} SymbolKind
@@ -15,6 +21,17 @@ export const LEGEND_TOPIC_DEFS = Object.freeze([
   { id: 'conflito', label: 'Conflito' },
   { id: 'outros', label: 'Outros' },
 ]);
+
+const SYMBOL_RANK = Object.freeze({
+  point: 0,
+  line: 1,
+  polygon: 2,
+  region: 3,
+});
+
+export function symbolRank(kind) {
+  return SYMBOL_RANK[kind] ?? 9;
+}
 
 /**
  * Apply optional explicit order of item ids (unknown ids keep relative order at end).
@@ -39,6 +56,107 @@ export function applyLegendItemOrder(items, order) {
     if (!used.has(item.id)) ordered.push(item);
   }
   return ordered;
+}
+
+/**
+ * Keep legend rows as icons → lines → polygons. With topics, that order holds inside each group.
+ * @param {Array<Record<string, unknown>>} items
+ * @param {{ groupByTopic?: boolean, categoryOrder?: string[] }} [options]
+ */
+export function prioritizeLegendSymbols(items = [], options = {}) {
+  const groupByTopic = Boolean(options.groupByTopic);
+  const categoryOrder = Array.isArray(options.categoryOrder) ? options.categoryOrder : [];
+  const topicRank = Object.fromEntries(categoryOrder.map((category, index) => [category, index]));
+  const topics = [];
+  const elements = [];
+  const locations = [];
+
+  for (const item of items) {
+    if (item?.source === 'location') locations.push(item);
+    else if (item?.symbolKind === 'topic') topics.push(item);
+    else elements.push(item);
+  }
+
+  elements.sort((a, b) => {
+    if (groupByTopic) {
+      const rankA = topicRank[categoryBucket(a.category)] ?? 99;
+      const rankB = topicRank[categoryBucket(b.category)] ?? 99;
+      if (rankA !== rankB) return rankA - rankB;
+    }
+    return symbolRank(a.symbolKind) - symbolRank(b.symbolKind);
+  });
+
+  return [...topics, ...elements, ...locations];
+}
+
+export function countLegendSymbolItems(items = []) {
+  return items.filter((item) => item?.symbolKind && item.symbolKind !== 'topic').length;
+}
+
+export function suggestLegendColumns(itemCount) {
+  const count = Math.max(0, Number(itemCount) || 0);
+  if (count <= 6) return 1;
+  if (count <= 14) return 2;
+  if (count <= 27) return 3;
+  return Math.min(LEGEND_COLUMNS_MAX, Math.max(4, Math.ceil(count / 10)));
+}
+
+export function legendColumnRangeForItemCount(itemCount) {
+  const count = Math.max(0, Number(itemCount) || 0);
+  const max = Math.max(
+    LEGEND_COLUMNS_MIN,
+    Math.min(LEGEND_COLUMNS_MAX, Math.max(1, count)),
+  );
+  return {
+    min: LEGEND_COLUMNS_MIN,
+    max,
+    options: Array.from(
+      { length: max - LEGEND_COLUMNS_MIN + 1 },
+      (_, index) => LEGEND_COLUMNS_MIN + index,
+    ),
+    suggested: Math.min(max, suggestLegendColumns(count) || DEFAULT_LEGEND_COLUMNS),
+  };
+}
+
+export function buildLocationLegendInput({
+  locations,
+  locationCount,
+  stateOnLegend,
+  showMunicipalMesh,
+  stateColor,
+  municipioColor,
+} = {}) {
+  if (!locationCount) return null;
+  const first = locations?.[0];
+  if (!first?.uf) return null;
+
+  const result = {
+    stateColor,
+    municipioColor,
+  };
+
+  if (stateOnLegend) result.stateLabel = first.stateName || first.uf;
+  if (showMunicipalMesh) {
+    result.municipioLabel = first.municipioName || 'Malha municipal';
+  }
+
+  if (stateOnLegend || showMunicipalMesh) {
+    result.topicLabel = 'Convencoes cartograficas';
+  }
+
+  if (!result.stateLabel && !result.municipioLabel) return null;
+  return result;
+}
+
+export function legendItemsFromSession(session = {}) {
+  return buildLegendItems({
+    elements: session.elements,
+    hiddenIds: session.hiddenIds,
+    location: buildLocationLegendInput(session),
+    order: session.legendItemOrder,
+    groupByTopic: session.legendGroupByTopic,
+    elementCategories: session.elementCategories,
+  });
 }
 
 /**
@@ -106,18 +224,13 @@ export function buildLegendItems(input = {}) {
     const category = categoryBucket(element?.element_category);
     if (!categoryOrder.includes(category)) categoryOrder.push(category);
   }
-  const items = [];
+  let elementItems = [];
 
-  for (const category of categoryOrder) {
-    for (const group of Object.values(grouped).filter(Array.isArray).flat()) {
-      if (group.category !== category) continue;
-      const hintSuffix = group.hasNameCollision && group.hints?.length
-        ? ` · ${group.hints.join(' · ')}`
-        : '';
-
-      items.push({
+  for (const type of TYPE_ORDER) {
+    for (const group of grouped[type] || []) {
+      elementItems.push({
         id: group.key,
-        label: hintSuffix ? group.label : group.label,
+        label: group.label,
         symbolKind: group.type,
         style: group.style,
         source: 'element',
@@ -126,9 +239,18 @@ export function buildLegendItems(input = {}) {
     }
   }
 
+  elementItems = prioritizeLegendSymbols(
+    applyLegendItemOrder(elementItems, input.order),
+    {
+      groupByTopic: Boolean(input.groupByTopic),
+      categoryOrder,
+    },
+  ).filter((item) => item.source === 'element');
+
   const location = input.location;
+  const locationItems = [];
   if (location?.stateLabel) {
-    items.push({
+    locationItems.push({
       id: 'location-state',
       label: location.stateLabel,
       symbolKind: 'region',
@@ -144,7 +266,7 @@ export function buildLegendItems(input = {}) {
   }
 
   if (location?.municipioLabel) {
-    items.push({
+    locationItems.push({
       id: 'location-municipio',
       label: location.municipioLabel,
       symbolKind: 'region',
@@ -159,36 +281,23 @@ export function buildLegendItems(input = {}) {
     });
   }
 
-  let working = items;
-  if (input.groupByTopic && !(Array.isArray(input.order) && input.order.length)) {
-    const topicRank = Object.fromEntries(categoryOrder.map((category, index) => [category, index]));
-    const elementItems = working.filter((item) => item.source === 'element');
-    const locationItems = working.filter((item) => item.source === 'location');
-    elementItems.sort((a, b) => {
-      const rankA = topicRank[categoryBucket(a.category)] ?? 99;
-      const rankB = topicRank[categoryBucket(b.category)] ?? 99;
-      return rankA - rankB;
-    });
-    if (locationItems.length && location?.topicLabel) {
-      working = [
-        ...elementItems,
-        {
-          id: 'topic-cartographic-conventions',
-          label: location.topicLabel,
-          symbolKind: 'topic',
-          style: {},
-          source: 'topic',
-          category: null,
-        },
-        ...locationItems,
-      ];
-    } else {
-      working = [...elementItems, ...locationItems];
-    }
+  let working = [...elementItems, ...locationItems];
+  if (input.groupByTopic && locationItems.length && location?.topicLabel) {
+    working = [
+      ...elementItems,
+      {
+        id: 'topic-cartographic-conventions',
+        label: location.topicLabel,
+        symbolKind: 'topic',
+        style: {},
+        source: 'topic',
+        category: null,
+      },
+      ...locationItems,
+    ];
   }
 
-  const ordered = applyLegendItemOrder(working, input.order);
-  return withLegendTopics(ordered, Boolean(input.groupByTopic), elementCategories);
+  return withLegendTopics(working, Boolean(input.groupByTopic), elementCategories);
 }
 
 export { categoryBucket };

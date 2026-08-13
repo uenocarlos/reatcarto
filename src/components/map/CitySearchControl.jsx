@@ -8,8 +8,16 @@ import { cn } from '@/lib/utils';
  * Barra de pesquisa de cidades (header do editor).
  * Recebe a instância Leaflet via prop `map`.
  */
-export default function CitySearchControl({ map = null, enabled = true, className }) {
-  const [query, setQuery] = useState('');
+export default function CitySearchControl({
+  map = null,
+  enabled = true,
+  className,
+  initialMunicipioLabel = '',
+  onMunicipioSelect,
+  onSuppressViewPersistenceStart,
+  onSuppressViewPersistenceEnd,
+}) {
+  const [query, setQuery] = useState(initialMunicipioLabel);
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -17,6 +25,10 @@ export default function CitySearchControl({ map = null, enabled = true, classNam
   const abortRef = useRef(null);
   const debounceRef = useRef(null);
   const rootRef = useRef(null);
+
+  useEffect(() => {
+    setQuery(initialMunicipioLabel || '');
+  }, [initialMunicipioLabel]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -86,8 +98,15 @@ export default function CitySearchControl({ map = null, enabled = true, classNam
     setQuery(place.label);
     setOpen(false);
     setResults([]);
+    onMunicipioSelect?.(place);
 
     if (!map) return;
+    onSuppressViewPersistenceStart?.();
+    const finishNavigate = () => {
+      map.off('moveend', finishNavigate);
+      onSuppressViewPersistenceEnd?.();
+    };
+    map.once('moveend', finishNavigate);
     if (place.bbox) {
       map.fitBounds(place.bbox, { padding: [40, 40], maxZoom: Math.min(place.zoom + 1, 16) });
     } else {

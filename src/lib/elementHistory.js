@@ -61,6 +61,7 @@ export function snapshotElement(el) {
     version: el.version,
     photos: el.photos ?? [],
     photo_urls: el.photo_urls ?? [],
+    videos: el.videos ?? [],
     video_urls: el.video_urls ?? [],
   };
 }

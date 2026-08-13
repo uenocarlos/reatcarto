@@ -9,7 +9,10 @@ import {
   mapEditorBasemapToExport,
   truncateTitleForPreview,
   deriveDefaultLegendLayout,
+  fitLegendInsideForItems,
+  anchorLegendInsideBottomRight,
 } from '@/lib/export/session';
+import { DEFAULT_BRASIL_COLOR, DEFAULT_MUNICIPIO_COLOR, DEFAULT_STATE_COLOR } from '@/lib/export/constants';
 
 describe('export session factory & inheritance', () => {
   it('UT-001: defaults and inheritance from snapshot', () => {
@@ -28,10 +31,13 @@ describe('export session factory & inheritance', () => {
     expect(session.paper).toBe('a4');
     expect(session.orientation).toBe('landscape');
     expect(session.dpi).toBe(300);
-    expect(session.legendPosition).toBe('inside');
+    expect(session.legendPosition).toBe('right');
     expect(session.locationCount).toBe(0);
     expect(session.basemap).toBe('osm');
     expect(session.hiddenIds.has('e2')).toBe(true);
+    expect(session.brasilColor).toBe(DEFAULT_BRASIL_COLOR);
+    expect(session.stateColor).toBe(DEFAULT_STATE_COLOR);
+    expect(session.municipioColor).toBe(DEFAULT_MUNICIPIO_COLOR);
   });
 
   it('UT-002: blank map name yields empty title', () => {
@@ -88,9 +94,9 @@ describe('export session factory & inheritance', () => {
     const s1 = createDefaultExportSession(createEditorExportSnapshot({ mapName: 'A', dpi: 150 }));
     const s2 = createDefaultExportSession(createEditorExportSnapshot({ mapName: 'B' }));
     s1.dpi = 120;
-    s1.legendPosition = 'right';
+    s1.legendPosition = 'bottom';
     expect(s2.dpi).toBe(300);
-    expect(s2.legendPosition).toBe('inside');
+    expect(s2.legendPosition).toBe('right');
     expect(s2.title).toBe('B');
   });
 });
@@ -150,6 +156,17 @@ describe('legend columns last-write-wins', () => {
     }
     expect(session.legendColumns).toBe(6);
   });
+
+  it('setLegendColumns respects the current legend item count', () => {
+    const session = createDefaultExportSession(createEditorExportSnapshot({
+      mapName: 'M',
+      elements: [
+        { id: 'e1', name: 'A', element_type: 'point' },
+        { id: 'e2', name: 'B', element_type: 'line' },
+      ],
+    }));
+    expect(setLegendColumns(session, 6, 2).legendColumns).toBe(2);
+  });
 });
 
 describe('adaptive default legend layout', () => {
@@ -170,6 +187,31 @@ describe('adaptive default legend layout', () => {
     expect(layout.inside.hPct).toBeLessThanOrEqual(90);
     expect(layout.inside.xPct + layout.inside.wPct).toBe(97);
     expect(layout.inside.yPct + layout.inside.hPct).toBe(97);
+  });
+
+  it('anchors fitted legend to bottom-right when it would clip', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      id: `i-${index}`,
+      label: `Item ${index}`,
+      symbolKind: 'point',
+    }));
+    const fitted = fitLegendInsideForItems(
+      { xPct: 70, yPct: 80, wPct: 20, hPct: 20 },
+      items,
+      { columns: 2, fontPx: 11, anchor: 'bottom-right' },
+    );
+    expect(fitted.xPct + fitted.wPct).toBe(97);
+    expect(fitted.yPct + fitted.hPct).toBe(97);
+    expect(fitted.hPct).toBeGreaterThanOrEqual(20);
+  });
+
+  it('anchorLegendInsideBottomRight keeps a 3% margin', () => {
+    expect(anchorLegendInsideBottomRight({ wPct: 40, hPct: 30 })).toEqual({
+      xPct: 57,
+      yPct: 67,
+      wPct: 40,
+      hPct: 30,
+    });
   });
 });
 

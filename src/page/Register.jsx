@@ -5,8 +5,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -67,12 +67,7 @@ export default function Register() {
   ];
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-primary p-4">
-      <Card className="w-full max-w-lg shadow-2xl">
-        <CardHeader>
-          <CardTitle>Criar conta profissional</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <AuthShell title="Criar conta profissional" wide>
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
             {fields.map(([key, label, type]) => (
               <div key={key} className="space-y-1">
@@ -121,8 +116,6 @@ export default function Register() {
               Entrar
             </Link>
           </p>
-        </CardContent>
-      </Card>
-    </div>
+    </AuthShell>
   );
 }

@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import { ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Lock, User } from 'lucide-react';
 import { toast } from 'sonner';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function Login({ onLoginSuccess }) {
   const [identifier, setIdentifier] = useState('');
@@ -55,20 +55,10 @@ export default function Login({ onLoginSuccess }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-primary p-4">
-      <Card className="w-full max-w-md shadow-2xl">
-        <CardHeader className="space-y-1 flex flex-col items-center">
-          <div className="flex justify-center mb-8">
-            <div className="bg-primary/10 p-4 rounded-2xl">
-              <img src="/logo.png" alt="ReatCarto Logo" className="w-48 h-auto object-contain" />
-            </div>
-          </div>
-          <h1 className="text-3xl font-bold text-foreground text-center mb-2">ReatCarto</h1>
-          <p className="text-sm text-muted-foreground text-center">
-            Entre com email ou usuário para gerenciar seus mapas
-          </p>
-        </CardHeader>
-        <CardContent>
+    <AuthShell
+      title="ReatCarto"
+      description="Entre com email ou usuário para gerenciar seus mapas"
+    >
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div className="space-y-2">
               <label htmlFor="identifier" className="text-sm font-medium flex items-center gap-2">
@@ -141,8 +131,6 @@ export default function Login({ onLoginSuccess }) {
               </Link>
             </p>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+    </AuthShell>
   );
 }

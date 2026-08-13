@@ -27,6 +27,10 @@ describe('Export end-to-end journeys', () => {
     expect(screen.getByTestId('export-title-input')).toHaveValue('Estuário');
     expect(screen.getByTestId('export-composition-root')).toBeInTheDocument();
     expect(screen.getByTestId('export-institutional-footer')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Dentro do mapa')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('À direita')).toBeInTheDocument();
+    expect(screen.getByLabelText('Abaixo')).toBeInTheDocument();
+    expect(screen.getByTestId('export-legend')).toHaveAttribute('data-legend-position', 'right');
 
     await user.click(screen.getByTestId('export-cancel-button'));
     expect(screen.queryByTestId('export-map-shell')).not.toBeInTheDocument();
@@ -51,6 +55,7 @@ describe('Export end-to-end journeys', () => {
 
     await user.click(screen.getByTestId('export-entry-button'));
     fireEvent.change(screen.getByTestId('export-authorship-input'), { target: { value: 'Autor' } });
+    fireEvent.click(screen.getByLabelText('Abaixo'));
     fireEvent.click(screen.getByLabelText('À direita'));
 
     await act(async () => {
@@ -112,6 +117,8 @@ describe('Export end-to-end journeys', () => {
     });
 
     expect(screen.getByTestId('export-location-uf-0')).toBeInTheDocument();
+    expect(screen.getByTestId('export-brasil-color')).toBeInTheDocument();
+    expect(screen.getByTestId('export-state-color')).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('0'));
 
@@ -123,6 +130,9 @@ describe('Export end-to-end journeys', () => {
   });
 
   it('E2E-008: narrow viewport export at moderate DPI succeeds', async () => {
+    const originalInnerWidth = window.innerWidth;
+    const originalInnerHeight = window.innerHeight;
+
     window.innerWidth = 390;
     window.innerHeight = 844;
     const generateDeps = makeGenerateDeps();
@@ -146,12 +156,20 @@ describe('Export end-to-end journeys', () => {
       expect(screen.getByTestId(id)).toBeInTheDocument();
     }
 
-    fireEvent.change(screen.getByTestId('export-dpi-input'), { target: { value: '150' } });
-    fireEvent.click(screen.getByTestId('export-download-button'));
+    expect(screen.queryByTestId('export-dpi-input')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dentro do mapa')).not.toBeInTheDocument();
+    expect(screen.getByTestId('export-mobile-view-button')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('export-mobile-view-button'));
+    expect(screen.getByTestId('export-mobile-preview-overlay')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('export-mobile-preview-export'));
 
     await waitFor(() => {
       expect(generateDeps.toPng).toHaveBeenCalled();
     });
+
+    window.innerWidth = originalInnerWidth;
+    window.innerHeight = originalInnerHeight;
   });
 
   it('E2E-009: reload equivalent remount restores default DPI', async () => {
@@ -166,5 +184,36 @@ describe('Export end-to-end journeys', () => {
     render(<EditorExportHarness />);
     await user.click(screen.getByTestId('export-entry-button'));
     expect(screen.getByTestId('export-dpi-input')).toHaveValue(300);
+  });
+
+  it('E2E-014: point with custom URL shows img marker and bitmap legend symbol', async () => {
+    const customUrl = '/php/icons/get.php?id=e2e-custom';
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(
+      <EditorExportHarness
+        elements={[
+          sampleElement('e1', 'Custom point', {
+            style: JSON.stringify({
+              icon_name: 'pin',
+              icon_color: '#ff0000',
+              custom_icon_url: customUrl,
+            }),
+          }),
+        ]}
+      />,
+    );
+
+    const { createColoredIcon } = await import('@/components/map/pointIcon');
+    const markerIcon = createColoredIcon('#ff0000', 'pin', customUrl, { zoom: 10 });
+    expect(markerIcon.html).toContain('<img');
+    expect(markerIcon.html).toContain(customUrl);
+    expect(markerIcon.html).not.toContain('mask-image');
+
+    await user.click(screen.getByTestId('export-entry-button'));
+
+    const legendItem = screen.getByTestId('export-legend-item');
+    const symbol = legendItem.querySelector('.export-legend__symbol--point-bitmap');
+    expect(symbol).toBeTruthy();
+    expect(symbol.querySelector('img')).toHaveAttribute('src', customUrl);
   });
 });

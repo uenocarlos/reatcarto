@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -25,6 +25,25 @@ import {
   mergeStyleWithPesqueiro,
   parsePesqueiroFromStyle,
 } from '@/lib/pesqueiro';
+import ColorField from '@/components/map/ColorField';
+import IconLibraryList from '@/components/map/IconLibraryList';
+import { api } from '@/api/apiClient';
+import { isOnline } from '@/lib/offline/connectivity';
+import { canUseIconCanvasEditor } from '@/lib/icons/desktopCapability';
+import {
+  builtInIconStyleUpdate,
+  resolveElementNameFromIcon,
+  resolveSuggestedIconEditorName,
+  shouldSyncElementNameFromIcon,
+} from '@/lib/icons/stylePanelIconHelpers';
+import {
+  editorMountKey,
+  nextEditorMountToken,
+  showIconEditorEntry,
+} from '@/lib/icons/stylePanelEditorHelpers';
+import { confirmIconEditorSave } from '@/lib/icons/iconEditorConfirm';
+
+const IconCanvasEditor = lazy(() => import('@/components/map/iconEditor/IconCanvasEditor'));
 
 /** Seletor de intervalo de meses (clique no início e no fim). */
 function MonthRangePicker({ monthStart, monthEnd, onChange }) {
@@ -316,6 +335,8 @@ export default function StylePanel({
   onDelete,
   onClose,
   onPreview,
+  isMobile = false,
+  onStartGeometryEdit,
 }) {
   const type = element?.element_type || 'point';
   const existingStyleParsed = element?.style
@@ -349,10 +370,42 @@ export default function StylePanel({
       url: p.url || api.media.url(p.id),
     }))
   );
-  const [videos, setVideos] = useState(element?.video_urls || []);
+  const [videos, setVideos] = useState(
+    (element?.videos ?? []).map((v) => ({
+      id: v.id,
+      version: v.version,
+      url: v.url || api.media.videoUrl(v.id),
+      content_type: v.content_type,
+    }))
+  );
   const [uploading, setUploading] = useState(false);
   const [newCategoryLabel, setNewCategoryLabel] = useState('');
   const [addingCategory, setAddingCategory] = useState(false);
+  const [libraryIcons, setLibraryIcons] = useState([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState(null);
+  const [removingIconId, setRemovingIconId] = useState(null);
+  const [iconTab, setIconTab] = useState('standard');
+  const [iconEditorOpen, setIconEditorOpen] = useState(false);
+  const [editorMountToken, setEditorMountToken] = useState(0);
+  const [iconConfirmInFlight, setIconConfirmInFlight] = useState(false);
+  const iconEditorOpenRef = useRef(false);
+
+  useEffect(() => {
+    iconEditorOpenRef.current = iconEditorOpen;
+  }, [iconEditorOpen]);
+
+  const closeIconEditor = useCallback(() => {
+    setIconEditorOpen(false);
+    setEditorMountToken((token) => nextEditorMountToken(token));
+  }, []);
+
+  const handlePanelClose = useCallback(() => {
+    if (iconEditorOpenRef.current) {
+      closeIconEditor();
+    }
+    onClose();
+  }, [closeIconEditor, onClose]);
 
   const selectedCategoryId = useMemo(() => {
     const raw = details.element_category;
@@ -379,13 +432,156 @@ export default function StylePanel({
         icon_name: style.icon_name,
         icon_color: style.icon_color,
         custom_icon_url: style.custom_icon_url,
+        name: details.name,
       });
     }
-  }, [style, isPesqueiro, pescarias]);
+  }, [style, isPesqueiro, pescarias, details.name]);
+
+  useEffect(() => {
+    if (type !== 'point') return undefined;
+
+    let cancelled = false;
+
+    const loadLibrary = async () => {
+      if (!isOnline()) {
+        setLibraryIcons([]);
+        setLibraryError('A biblioteca de ícones requer conexão com a internet.');
+        setLibraryLoading(false);
+        return;
+      }
+
+      setLibraryLoading(true);
+      setLibraryError(null);
+      try {
+        const icons = await api.icons.list();
+        if (!cancelled) {
+          setLibraryIcons(icons);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLibraryIcons([]);
+          setLibraryError(err?.message || 'Não foi possível carregar a biblioteca de ícones.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLibraryLoading(false);
+        }
+      }
+    };
+
+    void loadLibrary();
+    return () => {
+      cancelled = true;
+    };
+  }, [type]);
 
   const updateStyle = (updates) => {
     setStyle(prev => ({ ...prev, ...updates }));
   };
+
+  const suggestedNameForStyle = (nextStyle, libraryIcon = null) => (
+    resolveElementNameFromIcon({
+      iconName: nextStyle?.icon_name,
+      libraryIcon,
+      builtInIcons: POINT_ICONS,
+    })
+  );
+
+  const syncElementNameFromIcon = (nextSuggestedName) => {
+    const suggested = String(nextSuggestedName ?? '').trim();
+    if (!suggested) return;
+
+    const previousSuggested = suggestedNameForStyle(
+      style,
+      libraryIcons.find((entry) => entry.url === String(style.custom_icon_url || '').trim()) ?? null,
+    );
+
+    setDetails((prev) => {
+      if (!shouldSyncElementNameFromIcon(prev.name, previousSuggested)) return prev;
+      return { ...prev, name: suggested };
+    });
+  };
+
+  const handleBuiltInIconSelect = (iconName) => {
+    updateStyle(builtInIconStyleUpdate(iconName));
+    syncElementNameFromIcon(suggestedNameForStyle({ icon_name: iconName }));
+  };
+
+  const handleApplyLibraryIcon = (icon) => {
+    if (!icon?.url) return;
+    updateStyle({ custom_icon_url: icon.url });
+    syncElementNameFromIcon(icon.name);
+  };
+
+  const handleRemoveLibraryIcon = async (icon) => {
+    if (!icon?.id) return;
+    if (!isOnline()) {
+      toast.error('A biblioteca de ícones requer conexão com a internet.');
+      return;
+    }
+    setRemovingIconId(icon.id);
+    try {
+      await api.icons.remove(icon.id);
+      setLibraryIcons((prev) => prev.filter((entry) => entry.id !== icon.id));
+      toast.success('Ícone removido da biblioteca');
+    } catch (err) {
+      toast.error(err?.message || 'Não foi possível remover o ícone');
+    } finally {
+      setRemovingIconId(null);
+    }
+  };
+
+  const handleOpenIconEditor = () => {
+    if (!showIconEditorEntry()) return;
+    setIconEditorOpen(true);
+  };
+
+  const handleIconEditorCancel = () => {
+    closeIconEditor();
+  };
+
+  const handleIconEditorConfirm = async ({ blob, name }) => {
+    if (iconConfirmInFlight) return;
+
+    setIconConfirmInFlight(true);
+    const previousUrl = style.custom_icon_url;
+
+    try {
+      const result = await confirmIconEditorSave({
+        blob,
+        name,
+        createIcon: api.icons.create.bind(api.icons),
+        applyCustomIconUrl: (url) => updateStyle({ custom_icon_url: url }),
+        isOnlineCheck: isOnline,
+      });
+
+      if (!result.ok) {
+        toast.error(result.message);
+        updateStyle({ custom_icon_url: previousUrl });
+        return;
+      }
+
+      const icon = result.icon;
+      setLibraryIcons((prev) => {
+        if (prev.some((entry) => entry.id === icon.id)) return prev;
+        return [icon, ...prev];
+      });
+      syncElementNameFromIcon(icon.name || name);
+      setIconTab('custom');
+      closeIconEditor();
+      toast.success('Ícone salvo e aplicado ao ponto');
+    } finally {
+      setIconConfirmInFlight(false);
+    }
+  };
+
+  const hasCustomIcon = Boolean(String(style.custom_icon_url || '').trim());
+
+  useEffect(() => {
+    if (hasCustomIcon) {
+      setIconTab('custom');
+    }
+  }, [hasCustomIcon]);
 
   const handlePhotoUpload = async (files) => {
     if (!element?.id || element._isNew) {
@@ -443,18 +639,49 @@ export default function StylePanel({
     }
   };
 
+  const handleVideoUpload = async (files) => {
+    if (!element?.id || element._isNew) {
+      toast.error('Salve o elemento antes de anexar vídeos');
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of files) {
+        if (!file?.size) continue;
+        const video = await api.media.uploadVideo(element.id, file);
+        setVideos((prev) => [
+          ...prev,
+          {
+            id: video.id,
+            version: video.version ?? 1,
+            url: video.url || api.media.videoUrl(video.id),
+            content_type: video.content_type,
+          },
+        ]);
+      }
+    } catch (err) {
+      toast.error(err.message || 'Falha ao enviar vídeo');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleVideoRemove = async (videoId) => {
+    try {
+      const video = videos.find((v) => v.id === videoId);
+      await api.media.deleteVideo(videoId, video?.version);
+      setVideos((prev) => prev.filter((v) => v.id !== videoId));
+    } catch (err) {
+      toast.error(err.message || 'Falha ao remover vídeo');
+    }
+  };
+
   const handleFileUpload = async (files, fileType) => {
     if (fileType === 'photo') {
       await handlePhotoUpload(files);
       return;
     }
-    setUploading(true);
-    const urls = [];
-    for (const file of files) {
-      toast.error('Upload de vídeo ainda não disponível');
-    }
-    if (fileType === 'video') setVideos((prev) => [...prev, ...urls]);
-    setUploading(false);
+    await handleVideoUpload(files);
   };
 
   const handleSave = () => {
@@ -467,7 +694,8 @@ export default function StylePanel({
       icon_color: style.icon_color,
       custom_icon_url: style.custom_icon_url,
       photo_urls: photos.map((p) => p.url),
-      video_urls: videos,
+      videos,
+      video_urls: videos.map((v) => v.url),
     });
   };
 
@@ -556,12 +784,12 @@ export default function StylePanel({
         <h3 className="font-semibold text-sm">
           {type === 'point' ? 'Estilizar Ponto' : type === 'line' ? 'Estilizar Linha' : 'Estilizar Polígono'}
         </h3>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handlePanelClose}>
           <X className="w-4 h-4" />
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="w-full rounded-none border-b sticky top-0 z-10 bg-card h-auto flex-wrap">
             <TabsTrigger value="style" className="flex-1 text-xs">Estilo</TabsTrigger>
@@ -572,89 +800,158 @@ export default function StylePanel({
           </TabsList>
 
           <TabsContent value="style" className="p-3 sm:p-4 space-y-4">
+            {isMobile && onStartGeometryEdit ? (
+              <div className="rounded-lg border p-3 bg-muted/30 space-y-2">
+                <p className="text-xs text-muted-foreground leading-snug">
+                  {type === 'point'
+                    ? 'Para mover o ponto no mapa, abra o modo de edição de geometria.'
+                    : 'Para ajustar vértices e formato, abra o modo de edição no mapa.'}
+                </p>
+                <Button type="button" variant="outline" className="w-full gap-2" onClick={onStartGeometryEdit}>
+                  <Pencil className="w-4 h-4" />
+                  Editar geometria no mapa
+                </Button>
+              </div>
+            ) : null}
+
             {type === 'point' && (
               <>
-                <div>
-                  <Label className="text-xs mb-2 block">Cor do Ícone</Label>
-                  <input type="color" value={style.icon_color} onChange={(e) => updateStyle({ icon_color: e.target.value })} className="w-full h-10 rounded-lg cursor-pointer border-none p-0" />
-                </div>
+                <ColorField
+                  label="Cor do Ícone"
+                  value={style.icon_color}
+                  onChange={(hex) => updateStyle({ icon_color: hex })}
+                  disabled={hasCustomIcon}
+                />
+                {hasCustomIcon ? (
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    Ícones da biblioteca ou desenhados mantêm as cores originais; a cor acima não os altera.
+                  </p>
+                ) : null}
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <Label className="text-xs block">Ícone</Label>
-                    <span className="text-[10px] text-muted-foreground">{POINT_ICONS.length} opções</span>
-                  </div>
-                  <ScrollArea className="h-96 border rounded-lg p-3 bg-muted/20">
-                    <div className="grid grid-cols-5 gap-2">
-                      {POINT_ICONS.map(({ name, icon: Icon, label }) => {
-                        const isSelected = style.icon_name === name;
-                        return (
-                          <button
-                            key={name}
-                            title={label}
-                            className={`aspect-square flex items-center justify-center rounded-xl border-2 transition-all ${
-                              isSelected 
-                                ? 'border-primary bg-primary/20 shadow-inner' 
-                                : 'border-transparent hover:bg-accent hover:border-muted-foreground/20'
-                            }`}
-                            onClick={() => updateStyle({ icon_name: name })}
-                          >
-                            {name.startsWith('/') ? (
-                              <div 
-                                style={{ 
-                                  width: '24px', 
-                                  height: '24px', 
-                                  backgroundColor: style.icon_color,
-                                  maskImage: `url(${name})`,
-                                  WebkitMaskImage: `url(${name})`,
-                                  maskSize: 'contain',
-                                  WebkitMaskSize: 'contain',
-                                  maskRepeat: 'no-repeat',
-                                  WebkitMaskRepeat: 'no-repeat',
-                                  maskPosition: 'center',
-                                  WebkitMaskPosition: 'center'
-                                }} 
-                              />
-                            ) : (
-                              <Icon 
-                                size={24} 
-                                style={{ color: style.icon_color }} 
-                                strokeWidth={2.5}
-                              />
-                            )}
-                          </button>
-                        );
-                      })}
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs block">Ícones</Label>
+                      <span className="text-[10px] text-muted-foreground">
+                        {iconTab === 'standard'
+                          ? `${POINT_ICONS.length} opções`
+                          : `${libraryIcons.length} opções`}
+                      </span>
                     </div>
-                  </ScrollArea>
-                </div>
-                
-                <div>
-                  <Label className="text-xs mb-2 block">Ícone Personalizado (Upload)</Label>
-                  <input type="file" accept="image/*" onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    toast.error('Ícone personalizado via upload será suportado em versão futura');
-                  }} className="text-xs w-full" />
-                  {style.custom_icon_url && (
-                    <div className="mt-2 p-2 border rounded bg-muted/50 flex items-center gap-2">
-                      <img src={style.custom_icon_url} className="w-8 h-8 object-contain" alt="custom icon" />
-                      <span className="text-[10px] truncate flex-1">Ícone carregado</span>
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateStyle({ custom_icon_url: '' })}>
-                        <X className="w-3 h-3" />
+                    {showIconEditorEntry() ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-[10px] gap-1"
+                        onClick={handleOpenIconEditor}
+                      >
+                        <Pencil className="w-3 h-3" />
+                        Desenhar ícone
                       </Button>
-                    </div>
-                  )}
+                    ) : null}
+                  </div>
+
+                  <div className="flex rounded-lg border p-0.5 bg-muted/30 mb-2">
+                    <button
+                      type="button"
+                      className={`flex-1 text-[11px] py-1.5 rounded-md transition-colors ${
+                        iconTab === 'standard'
+                          ? 'bg-background shadow-sm font-medium'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      onClick={() => setIconTab('standard')}
+                    >
+                      Padrão
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex-1 text-[11px] py-1.5 rounded-md transition-colors ${
+                        iconTab === 'custom'
+                          ? 'bg-background shadow-sm font-medium'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      onClick={() => setIconTab('custom')}
+                    >
+                      Próprio
+                    </button>
+                  </div>
+
+                  <ScrollArea className="h-96 border rounded-lg p-3 bg-muted/20">
+                    {iconTab === 'standard' ? (
+                      <div className="grid grid-cols-5 gap-2">
+                        {POINT_ICONS.map(({ name, icon: Icon, label }) => {
+                          const isSelected = !hasCustomIcon && style.icon_name === name;
+                          return (
+                            <button
+                              key={name}
+                              type="button"
+                              title={label}
+                              className={`aspect-square flex items-center justify-center rounded-xl border-2 transition-all ${
+                                isSelected
+                                  ? 'border-primary bg-primary/20 shadow-inner'
+                                  : 'border-transparent hover:bg-accent hover:border-muted-foreground/20'
+                              }`}
+                              onClick={() => handleBuiltInIconSelect(name)}
+                            >
+                              {name.startsWith('/') ? (
+                                <div
+                                  style={{
+                                    width: '24px',
+                                    height: '24px',
+                                    backgroundColor: style.icon_color,
+                                    maskImage: `url(${name})`,
+                                    WebkitMaskImage: `url(${name})`,
+                                    maskSize: 'contain',
+                                    WebkitMaskSize: 'contain',
+                                    maskRepeat: 'no-repeat',
+                                    WebkitMaskRepeat: 'no-repeat',
+                                    maskPosition: 'center',
+                                    WebkitMaskPosition: 'center',
+                                  }}
+                                />
+                              ) : (
+                                <Icon
+                                  size={24}
+                                  style={{ color: style.icon_color }}
+                                  strokeWidth={2.5}
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : libraryLoading ? (
+                      <p className="text-[11px] text-muted-foreground text-center py-8">Carregando biblioteca…</p>
+                    ) : libraryError ? (
+                      <p className="text-[11px] text-destructive leading-snug text-center py-8">{libraryError}</p>
+                    ) : (
+                      <IconLibraryList
+                        icons={libraryIcons}
+                        selectedUrl={style.custom_icon_url}
+                        onSelect={handleApplyLibraryIcon}
+                        onRemove={handleRemoveLibraryIcon}
+                        removingId={removingIconId}
+                      />
+                    )}
+                  </ScrollArea>
+
+                  {!canUseIconCanvasEditor() ? (
+                    <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
+                      Desenhar novos ícones está disponível apenas no desktop.
+                    </p>
+                  ) : null}
                 </div>
               </>
             )}
 
             {type === 'line' && (
               <>
-                <div>
-                  <Label className="text-xs mb-2 block">Cor da Linha</Label>
-                  <input type="color" value={style.color} onChange={(e) => updateStyle({ color: e.target.value })} className="w-full h-10 rounded-lg cursor-pointer" />
-                </div>
+                <ColorField
+                  label="Cor da Linha"
+                  value={style.color}
+                  onChange={(hex) => updateStyle({ color: hex })}
+                />
                 <div>
                   <Label className="text-xs mb-2 block">Opacidade: {style.opacity}%</Label>
                   <Slider value={[style.opacity]} onValueChange={([v]) => updateStyle({ opacity: v })} max={100} step={5} />
@@ -693,10 +990,11 @@ export default function StylePanel({
 
             {type === 'polygon' && (
               <>
-                <div>
-                  <Label className="text-xs mb-2 block">Cor da Borda</Label>
-                  <input type="color" value={style.border_color} onChange={(e) => updateStyle({ border_color: e.target.value })} className="w-full h-10 rounded-lg cursor-pointer" />
-                </div>
+                <ColorField
+                  label="Cor da Borda"
+                  value={style.border_color}
+                  onChange={(hex) => updateStyle({ border_color: hex })}
+                />
                 <div>
                   <Label className="text-xs mb-2 block">Opacidade Borda: {style.border_opacity}%</Label>
                   <Slider value={[style.border_opacity]} onValueChange={([v]) => updateStyle({ border_opacity: v })} max={100} step={5} />
@@ -730,10 +1028,11 @@ export default function StylePanel({
                     ))}
                   </div>
                 </div>
-                <div>
-                  <Label className="text-xs mb-2 block">Cor do Preenchimento</Label>
-                  <input type="color" value={style.fill_color} onChange={(e) => updateStyle({ fill_color: e.target.value })} className="w-full h-10 rounded-lg cursor-pointer" />
-                </div>
+                <ColorField
+                  label="Cor do Preenchimento"
+                  value={style.fill_color}
+                  onChange={(hex) => updateStyle({ fill_color: hex })}
+                />
                 <div>
                   <Label className="text-xs mb-2 block">Opacidade Preenchimento: {style.fill_opacity}%</Label>
                   <Slider value={[style.fill_opacity]} onValueChange={([v]) => updateStyle({ fill_opacity: v })} max={100} step={5} />
@@ -818,20 +1117,33 @@ export default function StylePanel({
             <div>
               <Label className="text-xs mb-2 block">Vídeos</Label>
               <div className="flex flex-wrap gap-2 mb-2">
-                {videos.map((url, i) => (
-                  <div key={i} className="relative px-2 py-1 border rounded text-xs bg-muted">
-                    Vídeo {i + 1}
-                    <button className="ml-2 text-destructive" onClick={() => setVideos(videos.filter((_, idx) => idx !== i))}>
-                      <X className="w-3 h-3 inline" />
+                {videos.map((video) => (
+                  <div key={video.id} className="relative w-24 h-16 rounded-lg overflow-hidden border bg-muted">
+                    <video src={video.url} className="w-full h-full object-cover" muted preload="metadata" playsInline />
+                    <button
+                      type="button"
+                      className="absolute top-0 right-0 bg-destructive text-destructive-foreground rounded-bl p-0.5"
+                      onClick={() => handleVideoRemove(video.id)}
+                    >
+                      <X className="w-3 h-3" />
                     </button>
                   </div>
                 ))}
               </div>
               <label className="flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer hover:bg-accent text-xs">
                 <Video className="w-4 h-4" />
-                Adicionar Vídeos
-                <input type="file" accept="video/*" multiple className="hidden" onChange={(e) => handleFileUpload(Array.from(e.target.files), 'video')} />
+                {uploading ? 'Enviando…' : 'Adicionar Vídeos'}
+                <input
+                  type="file"
+                  accept="video/mp4,video/webm"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleFileUpload(Array.from(e.target.files || []), 'video')}
+                />
               </label>
+              <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                MP4 ou WebM, até 20 MB. Máximo de 5 vídeos por elemento.
+              </p>
             </div>
             <div>
               <Label className="text-xs mb-2 block">Visível no mapa público</Label>
@@ -980,7 +1292,7 @@ export default function StylePanel({
             </TabsContent>
           ) : null}
         </Tabs>
-      </ScrollArea>
+      </div>
 
       <div className="p-3 sm:p-4 border-t flex-shrink-0 flex gap-2">
         <Button variant="outline" onClick={handleDelete} className="flex-1 text-destructive hover:text-destructive">
@@ -1001,14 +1313,30 @@ export default function StylePanel({
         {panelContent}
       </div>
 
-      {/* Mobile: bottom sheet */}
-      <div className="sm:hidden absolute inset-x-0 bottom-0 bg-card border-t shadow-2xl z-[1001] flex flex-col rounded-t-2xl" style={{ maxHeight: '75dvh' }}>
-        {/* Drag handle */}
-        <div className="flex justify-center pt-2 pb-1 flex-shrink-0">
-          <div className="w-10 h-1 rounded-full bg-border" />
-        </div>
+      {/* Mobile: full screen */}
+      <div className="sm:hidden fixed inset-0 z-[1001] bg-card flex flex-col">
         {panelContent}
       </div>
+
+      {iconEditorOpen ? (
+        <Suspense fallback={null}>
+          <IconCanvasEditor
+            key={editorMountKey(editorMountToken)}
+            open={iconEditorOpen}
+            onOpenChange={setIconEditorOpen}
+            onConfirm={handleIconEditorConfirm}
+            onCancel={handleIconEditorCancel}
+            confirmDisabled={iconConfirmInFlight}
+            defaultName={resolveSuggestedIconEditorName({
+              customIconUrl: style.custom_icon_url,
+              iconName: style.icon_name,
+              libraryIcons,
+              builtInIcons: POINT_ICONS,
+            })}
+            libraryIcons={libraryIcons}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

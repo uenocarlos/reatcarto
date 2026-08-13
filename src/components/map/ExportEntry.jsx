@@ -1,17 +1,18 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 /**
  * Owner-only export entry control (ADR-002).
  */
-export default function ExportEntry({ onOpen, disabled = false, disabledReason }) {
+export default function ExportEntry({ onOpen, disabled = false, disabledReason, className }) {
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      className="gap-2"
+      className={cn('gap-2', className)}
       onClick={onOpen}
       disabled={disabled}
       aria-label="Exportar mapa"

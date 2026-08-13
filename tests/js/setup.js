@@ -12,6 +12,13 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub;
 }
 
+if (typeof screen !== 'undefined' && !screen.orientation) {
+  screen.orientation = {
+    lock: () => Promise.resolve(),
+    unlock: () => {},
+  };
+}
+
 if (typeof Element.prototype.hasPointerCapture === 'undefined') {
   Element.prototype.hasPointerCapture = () => false;
 }
@@ -24,6 +31,10 @@ if (typeof Element.prototype.releasePointerCapture === 'undefined') {
 
 afterEach(() => {
   cleanup();
+  if (typeof window !== 'undefined') {
+    window.innerWidth = 1024;
+    window.innerHeight = 768;
+  }
 });
 
 // Vitest setup for export library and composition integration tests.

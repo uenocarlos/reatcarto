@@ -1,38 +1,65 @@
 import React, { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { getIconSvg } from './iconSvgs';
 import { Button } from '@/components/ui/button';
-import { Navigation, Undo2, Redo2 } from 'lucide-react';
-import { Geolocation } from '@capacitor/geolocation';
+import { Undo2, Redo2 } from 'lucide-react';
 import ElementPopup from './ElementPopup';
 import ElementLayersPanel from './ElementLayersPanel';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import LocateMapButton from './LocateMapButton';
+import { createColoredIcon, iconSizeForZoom } from './pointIcon';
+import { getBasemapTileProps, MAP_MAX_ZOOM } from '@/lib/basemaps';
+import { editableRingIndexes, isClosedRing, midpointHandles } from '@/lib/editableGeometry';
 
-/** Persiste a vista do mapa após pan/zoom (debounce no pai). */
-function MapViewPersistence({ enabled = false, onViewChange }) {
+/** Garante que a vista inicial seja aplicada após montagem do mapa. */
+function MapInitialView({ view, suppressRef }) {
+  const map = useMap();
+  const appliedRef = useRef(false);
+
+  useEffect(() => {
+    if (!view || appliedRef.current) return;
+    appliedRef.current = true;
+    const center = map.getCenter();
+    const currentZoom = map.getZoom();
+    const needsMove =
+      Math.abs(center.lat - view.lat) > 1e-5 ||
+      Math.abs(center.lng - view.lng) > 1e-5 ||
+      currentZoom !== view.zoom;
+    if (needsMove) {
+      if (suppressRef) suppressRef.current += 1;
+      map.setView([view.lat, view.lng], view.zoom, { animate: false });
+      map.once('moveend', () => {
+        if (suppressRef) suppressRef.current = Math.max(0, suppressRef.current - 1);
+      });
+    }
+  }, [map, view, suppressRef]);
+
+  return null;
+}
+
+/** Persiste a vista do mapa após pan/zoom manual (debounce no pai). */
+function MapViewPersistence({
+  enabled = false,
+  onViewChange,
+  suppressRef,
+  userInteractedRef,
+}) {
   const map = useMap();
   const callbackRef = useRef(onViewChange);
   callbackRef.current = onViewChange;
 
   useMapEvents({
+    dragend: () => {
+      if (userInteractedRef) userInteractedRef.current = true;
+    },
+    zoomend: (event) => {
+      if (event.originalEvent && userInteractedRef) {
+        userInteractedRef.current = true;
+      }
+    },
     moveend: () => {
       if (!enabled || !callbackRef.current) return;
-      const c = map.getCenter();
-      const z = map.getZoom();
-      callbackRef.current({ lat: c.lat, lng: c.lng, zoom: z });
-    },
-    zoomend: () => {
-      if (!enabled || !callbackRef.current) return;
+      if (suppressRef?.current > 0) return;
+      if (userInteractedRef && !userInteractedRef.current) return;
       const c = map.getCenter();
       const z = map.getZoom();
       callbackRef.current({ lat: c.lat, lng: c.lng, zoom: z });
@@ -41,54 +68,6 @@ function MapViewPersistence({ enabled = false, onViewChange }) {
 
   return null;
 }
-
-const BASEMAP_URLS = {
-  branco: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  osm: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-  satelite: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-};
-
-const createColoredIcon = (color, iconName, customUrl) => {
-  const url = customUrl || (iconName && (iconName.startsWith('/') || iconName.startsWith('http') || iconName.endsWith('.svg')) ? iconName : null);
-  
-  if (url) {
-    // If it's a URL (custom or folder icon), use the mask technique to force color
-    return L.divIcon({
-      html: `<div style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;">
-               <div style="
-                 width: 28px; 
-                 height: 28px; 
-                 background-color: ${color || '#F97316'};
-                 mask-image: url(${url});
-                 -webkit-mask-image: url(${url});
-                 mask-size: contain;
-                 -webkit-mask-size: contain;
-                 mask-repeat: no-repeat;
-                 -webkit-mask-repeat: no-repeat;
-                 mask-position: center;
-                 -webkit-mask-position: center;
-                 filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.3));
-               "></div>
-             </div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 32], // Anchor at bottom center for markers
-      popupAnchor: [0, -32],
-      className: '',
-    });
-  }
-  
-  const svg = getIconSvg(iconName || 'pin', color || '#F97316');
-  
-  // For pin, anchor at bottom center; for others, center
-  const isPinLike = !iconName || iconName === 'pin' || iconName === 'flag';
-  return L.divIcon({
-    html: `<div style="filter:drop-shadow(1px 1px 2px rgba(0,0,0,0.3))">${svg}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: isPinLike ? [16, 32] : [16, 16],
-    popupAnchor: [0, -16],
-    className: '',
-  });
-};
 
 // Senior UI: Global CSS to unify Leaflet controls with the App's Design System
 const ControlStyles = () => (
@@ -211,28 +190,31 @@ function DrawingHandler({ activeTool, drawingMode, onAddPoint, onFreehandMove, o
   return null;
 }
 
+const VERTEX_SIZE = 22;
+const MIDPOINT_SIZE = 16;
+const DRAW_VERTEX_SIZE = 18;
+const DRAW_LINE_STYLE = { color: '#F97316', weight: 5, dashArray: '10 8', opacity: 0.9 };
+
 const vertexIcon = L.divIcon({
-  html: `<div style="width:14px;height:14px;background:#fff;border:2.5px solid #F97316;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.35);cursor:move"></div>`,
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
+  html: `<div style="width:${VERTEX_SIZE}px;height:${VERTEX_SIZE}px;background:#fff;border:3px solid #F97316;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4);cursor:move"></div>`,
+  iconSize: [VERTEX_SIZE, VERTEX_SIZE],
+  iconAnchor: [VERTEX_SIZE / 2, VERTEX_SIZE / 2],
   className: '',
 });
 
-/** Closed polygon rings repeat the first vertex at the end — omit duplicate handle. */
-function editableRingIndexes(ring) {
-  if (!ring || ring.length === 0) return [];
-  const last = ring.length - 1;
-  if (last > 0 && ring[0][0] === ring[last][0] && ring[0][1] === ring[last][1]) {
-    return Array.from({ length: last }, (_, i) => i);
-  }
-  return Array.from({ length: ring.length }, (_, i) => i);
-}
+const midpointIcon = L.divIcon({
+  html: `<div style="width:${MIDPOINT_SIZE}px;height:${MIDPOINT_SIZE}px;background:rgba(255,255,255,0.45);border:2.5px dashed #F97316;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:move"></div>`,
+  iconSize: [MIDPOINT_SIZE, MIDPOINT_SIZE],
+  iconAnchor: [MIDPOINT_SIZE / 2, MIDPOINT_SIZE / 2],
+  className: '',
+});
 
-function isClosedRing(ring) {
-  if (!ring || ring.length < 2) return false;
-  const last = ring.length - 1;
-  return ring[0][0] === ring[last][0] && ring[0][1] === ring[last][1];
-}
+const drawVertexIcon = L.divIcon({
+  html: `<div style="width:${DRAW_VERTEX_SIZE}px;height:${DRAW_VERTEX_SIZE}px;background:#F97316;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4)"></div>`,
+  iconSize: [DRAW_VERTEX_SIZE, DRAW_VERTEX_SIZE],
+  iconAnchor: [DRAW_VERTEX_SIZE / 2, DRAW_VERTEX_SIZE / 2],
+  className: '',
+});
 
 /**
  * Line/polygon editor: updates path live via Leaflet API (no React re-render mid-drag)
@@ -243,20 +225,38 @@ function EditableShape({ element, type, style, onGeometryChange, onContextMenu }
   const baseLngLat = type === 'line' ? geojson.coordinates : geojson.coordinates[0];
   const closed = type === 'polygon' && isClosedRing(baseLngLat);
   const vertexIndexes = type === 'polygon' ? editableRingIndexes(baseLngLat) : baseLngLat.map((_, i) => i);
+  const midpoints = midpointHandles(baseLngLat, closed);
 
   const pathRef = useRef(null);
   const coordsRef = useRef(baseLngLat.map((c) => [c[0], c[1]]));
+  const midpointDragRef = useRef(null);
 
   useEffect(() => {
     const g = JSON.parse(element.geojson);
     const next = type === 'line' ? g.coordinates : g.coordinates[0];
     coordsRef.current = next.map((c) => [c[0], c[1]]);
+    midpointDragRef.current = null;
     const layer = pathRef.current;
     if (layer) {
       const latlngs = next.map((c) => [c[1], c[0]]);
       layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
     }
   }, [element.geojson, type]);
+
+  const commitGeometry = (next) => {
+    if (type === 'line') {
+      onGeometryChange?.({ type: 'LineString', coordinates: next });
+    } else {
+      onGeometryChange?.({ type: 'Polygon', coordinates: [next] });
+    }
+  };
+
+  const updatePath = (next) => {
+    const layer = pathRef.current;
+    if (!layer) return;
+    const latlngs = next.map((c) => [c[1], c[0]]);
+    layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
+  };
 
   const applyVertex = (index, latlng, commit) => {
     const next = coordsRef.current.map((c, i) =>
@@ -267,19 +267,26 @@ function EditableShape({ element, type, style, onGeometryChange, onContextMenu }
       next[next.length - 1] = [latlng.lng, latlng.lat];
     }
     coordsRef.current = next;
+    updatePath(next);
+    if (commit) commitGeometry(next);
+  };
 
-    const layer = pathRef.current;
-    if (layer) {
-      const latlngs = next.map((c) => [c[1], c[0]]);
-      layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
+  const applyMidpoint = (insertAt, latlng, commit) => {
+    if (!midpointDragRef.current) {
+      const next = coordsRef.current.map((c) => [c[0], c[1]]);
+      next.splice(insertAt, 0, [latlng.lng, latlng.lat]);
+      coordsRef.current = next;
+      midpointDragRef.current = { index: insertAt };
+    } else {
+      const idx = midpointDragRef.current.index;
+      coordsRef.current = coordsRef.current.map((c, i) =>
+        i === idx ? [latlng.lng, latlng.lat] : [c[0], c[1]]
+      );
     }
-
+    updatePath(coordsRef.current);
     if (commit) {
-      if (type === 'line') {
-        onGeometryChange?.({ type: 'LineString', coordinates: next });
-      } else {
-        onGeometryChange?.({ type: 'Polygon', coordinates: [next] });
-      }
+      midpointDragRef.current = null;
+      commitGeometry(coordsRef.current);
     }
   };
 
@@ -289,13 +296,13 @@ function EditableShape({ element, type, style, onGeometryChange, onContextMenu }
       ? {
           color: style.color || '#F97316',
           opacity: (style.opacity || 100) / 100,
-          weight: style.weight || 3,
+          weight: Math.max(style.weight || 3, 5),
           dashArray: getDashArray(style.dash_style),
         }
       : {
           color: style.border_color || '#F97316',
           opacity: (style.border_opacity || 100) / 100,
-          weight: style.border_weight || 2,
+          weight: Math.max(style.border_weight || 2, 4),
           dashArray: getDashArray(style.border_dash),
           fillColor: style.fill_color || '#FED7AA',
           fillOpacity: (style.fill_opacity || 40) / 100,
@@ -331,11 +338,35 @@ function EditableShape({ element, type, style, onGeometryChange, onContextMenu }
           }}
         />
       ))}
+      {midpoints.map((mid) => (
+        <Marker
+          key={`${element.id}-m-${mid.key}`}
+          position={[mid.lat, mid.lng]}
+          icon={midpointIcon}
+          draggable
+          zIndexOffset={900}
+          eventHandlers={{
+            dragstart: (e) => applyMidpoint(mid.insertAt, e.target.getLatLng(), false),
+            drag: (e) => applyMidpoint(mid.insertAt, e.target.getLatLng(), false),
+            dragend: (e) => applyMidpoint(mid.insertAt, e.target.getLatLng(), true),
+          }}
+        />
+      ))}
     </>
   );
 }
 
 function MapElements({ elements, onElementLongPress, tempLine, editingElementId, onGeometryChange }) {
+  const map = useMap();
+  const [pointIconSize, setPointIconSize] = useState(() => iconSizeForZoom(map.getZoom()));
+
+  useMapEvents({
+    zoomend: () => {
+      const next = iconSizeForZoom(map.getZoom());
+      setPointIconSize((prev) => (prev === next ? prev : next));
+    },
+  });
+
   const handleContextMenu = (e, el) => {
     e.originalEvent.preventDefault();
     const containerPoint = e.containerPoint || { x: e.originalEvent.clientX, y: e.originalEvent.clientY };
@@ -352,10 +383,15 @@ function MapElements({ elements, onElementLongPress, tempLine, editingElementId,
 
         if (el.element_type === 'point') {
           const coords = geojson.coordinates;
-          const icon = createColoredIcon(style.icon_color || '#F97316', style.icon_name, style.custom_icon_url || el.custom_icon_url);
+          const icon = createColoredIcon(
+            style.icon_color || '#F97316',
+            style.icon_name,
+            style.custom_icon_url || el.custom_icon_url,
+            { size: pointIconSize, withPopupAnchor: true },
+          );
           return (
             <Marker
-              key={el.id}
+              key={`${el.id}-s${pointIconSize}`}
               position={[coords[1], coords[0]]}
               icon={icon}
               draggable={isEditing}
@@ -441,7 +477,7 @@ function MapElements({ elements, onElementLongPress, tempLine, editingElementId,
 
       {/* Temp drawing line */}
       {tempLine && tempLine.length > 1 && (
-        <Polyline positions={tempLine} pathOptions={{ color: '#F97316', weight: 2, dashArray: '5 5', opacity: 0.7 }} />
+        <Polyline positions={tempLine} pathOptions={DRAW_LINE_STYLE} />
       )}
     </>
   );
@@ -459,16 +495,13 @@ function PasteHandler({ enabled, onPasteAt }) {
 
 function PointByPointLine({ points }) {
   if (!points || points.length < 2) return null;
-  return <Polyline positions={points} pathOptions={{ color: '#F97316', weight: 2, dashArray: '5 5', opacity: 0.7 }} />;
+  return <Polyline positions={points} pathOptions={DRAW_LINE_STYLE} />;
 }
 
 function PointByPointMarkers({ points }) {
   if (!points || points.length === 0) return null;
   return points.map((p, i) => (
-    <Marker key={`temp-${i}`} position={p} icon={L.divIcon({
-      html: `<div style="width:8px;height:8px;background:#F97316;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>`,
-      iconSize: [8, 8], iconAnchor: [4, 4], className: ''
-    })} />
+    <Marker key={`temp-${i}`} position={p} icon={drawVertexIcon} zIndexOffset={1000} />
   ));
 }
 
@@ -490,30 +523,14 @@ function MapControls({
   hiddenIds,
   onHiddenIdsChange,
   layersEnabled = false,
+  showLocateControl = true,
   basemap,
   onBasemapChange,
+  userInteractedRef,
+  onLocated,
 }) {
   const map = useMap();
-  const [showLocationPrompt, setShowLocationPrompt] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
-
-  const handleLocationClick = () => {
-    setShowLocationPrompt(true);
-  };
-
-  const confirmLocation = async () => {
-    setShowLocationPrompt(false);
-    try {
-      const pos = await Geolocation.getCurrentPosition({
-        enableHighAccuracy: true
-      });
-      map.flyTo([pos.coords.latitude, pos.coords.longitude], 16);
-    } catch (e) {
-      console.error(e);
-      // Fallback to leaflet's native locate if capacitor fails or isn't available
-      map.locate({ setView: true, maxZoom: 16 });
-    }
-  };
 
   return (
     <>
@@ -549,15 +566,16 @@ function MapControls({
         ref={bindLeafletControlEvents}
         className="absolute top-3 right-3 z-[1000] flex flex-col gap-2 items-end"
       >
-        <Button
-          variant="secondary"
-          size="icon"
-          className="h-12 w-12 shadow-lg bg-card border rounded-[12px]"
-          onClick={handleLocationClick}
-          title="Minha Localização"
-        >
-          <Navigation className="w-6 h-6 text-primary" />
-        </Button>
+        {showLocateControl ? (
+          <LocateMapButton
+            map={map}
+            variant="map"
+            userInteractedRef={userInteractedRef}
+            onLocated={onLocated}
+          />
+        ) : (
+          <div className="h-12 w-12 pointer-events-none" aria-hidden />
+        )}
 
         {layersEnabled ? (
           <ElementLayersPanel
@@ -571,21 +589,6 @@ function MapControls({
           />
         ) : null}
       </div>
-
-      <AlertDialog open={showLocationPrompt} onOpenChange={setShowLocationPrompt}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Usar Localização?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Deseja usar sua localização atual para navegar no mapa?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Não</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmLocation}>Sim, usar GPS</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }
@@ -617,6 +620,12 @@ export default function LeafletMap({
   onBasemapChange,
   onViewChange,
   mapKey,
+  initialView = null,
+  suppressViewPersistenceRef = null,
+  userInteractedRef = null,
+  showDecorativeBorder = false,
+  showLocateControl = true,
+  onLocated,
 }) {
   const [tempFreehand, setTempFreehand] = useState([]);
   const [pointByPointCoords, setPointByPointCoords] = useState([]);
@@ -626,7 +635,7 @@ export default function LeafletMap({
   const setHiddenIds = onHiddenIdsChange ?? setInternalHiddenIds;
   const basemap = controlledBasemap ?? internalBasemap;
   const setBasemap = onBasemapChange ?? setInternalBasemap;
-  const basemapUrl = BASEMAP_URLS[basemap] || BASEMAP_URLS.branco;
+  const basemapTile = getBasemapTileProps(basemap);
 
   const visibleElements = useMemo(
     () => elements.filter((el) => !hiddenIds.has(String(el.id))),
@@ -690,15 +699,24 @@ export default function LeafletMap({
       <MapContainer 
         key={mapKey || undefined}
         center={center} 
-        zoom={zoom} 
+        zoom={zoom}
+        maxZoom={MAP_MAX_ZOOM}
         style={{ width: '100%', height: '100%' }} 
         zoomControl={false}
         attributionControl={false}
       >
         <MapInstanceCapture />
-        <MapViewPersistence enabled={!readOnly && !!onViewChange} onViewChange={onViewChange} />
+        {initialView ? (
+          <MapInitialView view={initialView} suppressRef={suppressViewPersistenceRef} />
+        ) : null}
+        <MapViewPersistence
+          enabled={!readOnly && !!onViewChange}
+          onViewChange={onViewChange}
+          suppressRef={suppressViewPersistenceRef}
+          userInteractedRef={userInteractedRef}
+        />
 
-        <TileLayer key={basemap} url={basemapUrl} />
+        <TileLayer key={basemap} {...basemapTile} />
 
         {!readOnly && (
           <DrawingHandler
@@ -737,13 +755,20 @@ export default function LeafletMap({
           onUndo={onUndo}
           onRedo={onRedo}
           layersEnabled
+          showLocateControl={showLocateControl}
           elements={elements}
           hiddenIds={hiddenIds}
           onHiddenIdsChange={setHiddenIds}
           basemap={basemap}
           onBasemapChange={setBasemap}
+          userInteractedRef={userInteractedRef}
+          onLocated={onLocated}
         />
       </MapContainer>
+
+      {showDecorativeBorder ? (
+        <div className="editor-map-decorative-frame" aria-hidden data-testid="editor-map-decorative-frame" />
+      ) : null}
 
       {/* Point-by-point finish button */}
       {!readOnly && drawingMode === 'point-by-point' && pointByPointCoords.length >= 2 && (

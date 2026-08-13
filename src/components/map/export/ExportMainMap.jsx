@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { MapContainer, TileLayer } from 'react-leaflet';
-import { resolveBasemapTileUrl } from '@/lib/export';
+import { getBasemapTileLayerProps, MAP_MAX_ZOOM } from '@/lib/export';
 import ExportElementLayers from './ExportElementLayers';
 import ExportLocationOverlay from './ExportLocationOverlay';
 import DecorativeFrame from './DecorativeFrame';
@@ -10,6 +10,7 @@ import {
   MapInvalidateSize,
   CollisionMonitor,
   MapViewSync,
+  MapRotatedInteraction,
   TileReadyTracker,
 } from './MapChrome';
 import './exportComposition.css';
@@ -27,9 +28,9 @@ export default function ExportMainMap({
   stateOnLegend = false,
   stateColor = '#D9E6A4',
   municipioColor = '#E6A4A4',
-  northPosition = { xPct: 8, yPct: 68 },
+  northPosition = { xPct: 22, yPct: 68 },
   northSizePx = 70,
-  scalePosition = { xPct: 3, yPct: 86 },
+  scalePosition = { xPct: 18, yPct: 86 },
   scaleSizePx = 140,
   className = '',
   interactive = true,
@@ -39,8 +40,9 @@ export default function ExportMainMap({
   onChromeChange,
   onCollisionChange,
   fetchFn,
+  interactionRotation = 0,
 }) {
-  const tileUrl = resolveBasemapTileUrl(basemap);
+  const tileProps = getBasemapTileLayerProps(basemap);
 
   const handleTiles = useCallback((ready) => {
     onTilesReadyChange?.(ready);
@@ -53,6 +55,7 @@ export default function ExportMainMap({
           <MapContainer
             center={[center?.lat ?? 0, center?.lng ?? 0]}
             zoom={zoom ?? 10}
+            maxZoom={MAP_MAX_ZOOM}
             scrollWheelZoom={interactive}
             dragging={interactive}
             doubleClickZoom={interactive}
@@ -64,7 +67,10 @@ export default function ExportMainMap({
             <MapInvalidateSize />
             <TileReadyTracker basemap={basemap} onReadyChange={handleTiles} />
             {onViewChange ? <MapViewSync onViewChange={onViewChange} /> : null}
-            <TileLayer url={tileUrl} crossOrigin="anonymous" />
+            {interactionRotation ? (
+              <MapRotatedInteraction rotationDegrees={interactionRotation} />
+            ) : null}
+            <TileLayer key={basemap} {...tileProps} />
             <ExportLocationOverlay
               locationCount={locationCount}
               locations={locations}
@@ -75,7 +81,7 @@ export default function ExportMainMap({
               onGeoLoadError={onGeoLoadError}
               fetchFn={fetchFn}
             />
-            <ExportElementLayers elements={elements} hiddenIds={hiddenIds} showLabels={showLabels} />
+            <ExportElementLayers elements={elements} hiddenIds={hiddenIds} showLabels={showLabels} zoom={zoom} />
             <GraticuleOverlay />
             <MapChromeOverlay
               northPosition={northPosition}

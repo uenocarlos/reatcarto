@@ -126,7 +126,8 @@ function public_elements_list(string $publicId, int $page = 1, int $pageSize = D
     $elements = [];
     while ($elementRow = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $photos = photos_for_element_public((string) $elementRow['id']);
-        $elements[] = format_public_element_record($elementRow, $photos);
+        $videos = videos_for_element_public((string) $elementRow['id']);
+        $elements[] = format_public_element_record($elementRow, $photos, $videos);
     }
 
     return [

@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Search, Globe, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MapPin, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { isOnline } from '@/lib/offline/connectivity';
 import { useAuth } from '@/lib/AuthContext';
+import AppShell, { IDENTITY_CARD_CLASS } from '@/components/layout/AppShell';
 
 function mergeMaps(existing, incoming) {
   const seen = new Set(existing.map((m) => m.public_id));
@@ -67,31 +68,14 @@ export default function Gallery() {
   const offline = !isOnline();
 
   return (
-    <div className="min-h-screen bg-background font-inter">
-      <div className="bg-primary">
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Globe className="w-8 h-8 text-primary-foreground" />
-              <div>
-                <h1 className="text-2xl font-bold text-primary-foreground">Galeria Pública</h1>
-                <p className="text-primary-foreground/80 text-sm">Mapas publicados pela comunidade</p>
-              </div>
-            </div>
-            {!isLoadingAuth && (
-              <Button variant="secondary" size="sm" asChild>
-                {isAuthenticated ? (
-                  <Link to="/">Meus mapas</Link>
-                ) : (
-                  <Link to="/login">Entrar</Link>
-                )}
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-4xl mx-auto px-4 py-8">
+    <AppShell
+      guest={!isAuthenticated}
+      showGuestCta={!isLoadingAuth && !isAuthenticated}
+      guestTitle="Galeria Pública"
+      guestSubtitle="Mapas publicados pela comunidade"
+      title={isAuthenticated ? 'Galeria Pública' : undefined}
+      maxWidth="max-w-4xl"
+    >
         <form onSubmit={handleSearch} className="flex gap-2 mb-6">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -148,7 +132,7 @@ export default function Gallery() {
             {maps.map((map) => (
               <Card
                 key={map.public_id}
-                className="cursor-pointer hover:shadow-md transition-shadow"
+                className={`cursor-pointer hover:shadow-lg transition-shadow ${IDENTITY_CARD_CLASS}`}
                 onClick={() => navigate(`/gallery/${map.public_id}`)}
               >
                 <CardContent className="p-4 flex items-start gap-3">
@@ -199,7 +183,6 @@ export default function Gallery() {
             </Button>
           </div>
         )}
-      </div>
-    </div>
+    </AppShell>
   );
 }

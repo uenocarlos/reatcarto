@@ -87,7 +87,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-inter;
   }
 }
 
@@ -95,6 +95,19 @@
   width: 100% !important;
   height: 100% !important;
   z-index: 1;
+}
+
+.editor-map-decorative-frame {
+  position: absolute;
+  inset: 0;
+  /* Above the map tiles, below dialogs (z-50) so Exportar covers the frame. */
+  z-index: 2;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 50px solid transparent;
+  border-image-source: url('/borda.png');
+  border-image-slice: 50;
+  border-image-repeat: stretch;
 }
 
 .leaflet-control-container .leaflet-top,

@@ -95,6 +95,8 @@ const L = {
   },
   DomEvent: {
     disableClickPropagation: () => {},
+    on: () => {},
+    off: () => {},
   },
   mapStubApi,
 };

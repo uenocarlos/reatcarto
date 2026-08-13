@@ -53,13 +53,18 @@ export function EditorExportHarness({
   elements = [sampleElement('e1')],
   mapName = 'Mapa Teste',
   authBlocked = false,
-  generateDeps = null,
+  generateDeps: generateDepsProp = null,
 }) {
   const [basemap, setBasemap] = useState(initialBasemap);
   const [hiddenIds] = useState(() => new Set());
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSessionKey, setExportSessionKey] = useState(0);
   const [exportSnapshot, setExportSnapshot] = useState(null);
+  const defaultGenerateDepsRef = useRef(null);
+  if (!defaultGenerateDepsRef.current) {
+    defaultGenerateDepsRef.current = makeGenerateDeps();
+  }
+  const generateDeps = generateDepsProp ?? defaultGenerateDepsRef.current;
   const mapInstanceRef = useRef({
     getCenter: () => ({ lat: -30.1, lng: -51.2 }),
     getZoom: () => 10,

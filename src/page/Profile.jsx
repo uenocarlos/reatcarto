@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
 import { useAuth } from '@/lib/AuthContext';
 import { clearOfflineAccount } from '@/lib/offline/offlineApi';
@@ -7,6 +6,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import AppShell, { IDENTITY_CARD_CLASS } from '@/components/layout/AppShell';
+import ProfileMediaLibrary from '@/components/profile/ProfileMediaLibrary';
+
+const PROFILE_FIELDS = [
+  ['full_name', 'Nome completo'],
+  ['organization', 'Organização'],
+  ['job_title', 'Cargo'],
+  ['phone', 'Telefone'],
+];
 
 export default function Profile() {
   const { user, refreshUser, logout } = useAuth();
@@ -99,135 +107,127 @@ export default function Profile() {
   };
 
   return (
-    <div className="min-h-screen bg-background p-6 max-w-2xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Configurações da conta</h1>
-        <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <Link to="/">Voltar</Link>
-          </Button>
-          <Button variant="outline" onClick={() => logout()}>
-            Sair
-          </Button>
-        </div>
-      </div>
-
+    <AppShell title="Configurações da conta" maxWidth="max-w-4xl">
       {user?.pending_email && (
-        <p className="text-sm text-muted-foreground" role="status">
+        <p className="text-sm text-muted-foreground mb-6" role="status">
           Email pendente de verificação: {user.pending_email}
         </p>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Perfil profissional</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveProfile} className="space-y-3">
-            {Object.entries(profile).map(([key, value]) => (
-              <div key={key}>
-                <label htmlFor={key} className="text-sm font-medium capitalize">
-                  {key.replace('_', ' ')}
-                </label>
-                <Input
-                  id={key}
-                  value={value}
-                  onChange={(e) => setProfile((p) => ({ ...p, [key]: e.target.value }))}
-                  aria-invalid={!!fieldErrors[key]}
-                />
-                {fieldErrors[key] && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {fieldErrors[key]}
-                  </p>
-                )}
-              </div>
-            ))}
-            <Button type="submit" disabled={loadingSection === 'profile'}>
-              Salvar perfil
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <div className="space-y-6">
+        <Card className={IDENTITY_CARD_CLASS}>
+          <CardHeader>
+            <CardTitle>Perfil profissional</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={saveProfile} className="space-y-3">
+              {PROFILE_FIELDS.map(([key, label]) => (
+                <div key={key}>
+                  <label htmlFor={key} className="text-sm font-medium">
+                    {label}
+                  </label>
+                  <Input
+                    id={key}
+                    value={profile[key]}
+                    onChange={(e) => setProfile((p) => ({ ...p, [key]: e.target.value }))}
+                    aria-invalid={!!fieldErrors[key]}
+                  />
+                  {fieldErrors[key] && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {fieldErrors[key]}
+                    </p>
+                  )}
+                </div>
+              ))}
+              <Button type="submit" disabled={loadingSection === 'profile'}>
+                Salvar perfil
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Usuário</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveUsername} className="space-y-3">
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
-            <Button type="submit" disabled={loadingSection === 'username'}>
-              Alterar usuário
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+        <Card className={IDENTITY_CARD_CLASS}>
+          <CardHeader>
+            <CardTitle>Usuário</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={saveUsername} className="space-y-3">
+              <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+              <Button type="submit" disabled={loadingSection === 'username'}>
+                Alterar usuário
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Email</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm mb-2">Atual: {user?.email}</p>
-          <form onSubmit={saveEmail} className="space-y-3">
-            <Input
-              type="email"
-              placeholder="Novo email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <Button type="submit" disabled={loadingSection === 'email'}>
-              Alterar email
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+        <Card className={IDENTITY_CARD_CLASS}>
+          <CardHeader>
+            <CardTitle>Email</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm mb-2">Atual: {user?.email}</p>
+            <form onSubmit={saveEmail} className="space-y-3">
+              <Input
+                type="email"
+                placeholder="Novo email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <Button type="submit" disabled={loadingSection === 'email'}>
+                Alterar email
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Senha</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={savePassword} className="space-y-3">
-            <Input
-              type="password"
-              placeholder="Senha atual"
-              value={passwords.current}
-              onChange={(e) => setPasswords((p) => ({ ...p, current: e.target.value }))}
-            />
-            <Input
-              type="password"
-              placeholder="Nova senha"
-              value={passwords.new}
-              onChange={(e) => setPasswords((p) => ({ ...p, new: e.target.value }))}
-            />
-            <Input
-              type="password"
-              placeholder="Confirmar nova senha"
-              value={passwords.confirmation}
-              onChange={(e) => setPasswords((p) => ({ ...p, confirmation: e.target.value }))}
-            />
-            <Button type="submit" disabled={loadingSection === 'password'}>
-              Alterar senha
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+        <Card className={IDENTITY_CARD_CLASS}>
+          <CardHeader>
+            <CardTitle>Senha</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={savePassword} className="space-y-3">
+              <Input
+                type="password"
+                placeholder="Senha atual"
+                value={passwords.current}
+                onChange={(e) => setPasswords((p) => ({ ...p, current: e.target.value }))}
+              />
+              <Input
+                type="password"
+                placeholder="Nova senha"
+                value={passwords.new}
+                onChange={(e) => setPasswords((p) => ({ ...p, new: e.target.value }))}
+              />
+              <Input
+                type="password"
+                placeholder="Confirmar nova senha"
+                value={passwords.confirmation}
+                onChange={(e) => setPasswords((p) => ({ ...p, confirmation: e.target.value }))}
+              />
+              <Button type="submit" disabled={loadingSection === 'password'}>
+                Alterar senha
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
-      <Card className="border-destructive/40">
-        <CardHeader>
-          <CardTitle className="text-destructive">Excluir conta permanentemente</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground mb-4">
-            Esta ação remove permanentemente sua conta, mapas, elementos, fotos, acesso público e
-            sessões. Alterações locais ainda não sincronizadas também serão descartadas. Esta ação
-            não pode ser desfeita.
-          </p>
-          <DeleteAccountSection onDeleted={() => logout({ discardConfirmed: true })} />
-        </CardContent>
-      </Card>
-    </div>
+        <ProfileMediaLibrary />
+
+        <Card className={`${IDENTITY_CARD_CLASS} border-destructive/40`}>
+          <CardHeader>
+            <CardTitle className="text-destructive">Excluir conta permanentemente</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Esta ação remove permanentemente sua conta, mapas, elementos, fotos, vídeos, ícones,
+              acesso público e sessões. Alterações locais ainda não sincronizadas também serão
+              descartadas. Esta ação não pode ser desfeita.
+            </p>
+            <DeleteAccountSection onDeleted={() => logout({ discardConfirmed: true })} />
+          </CardContent>
+        </Card>
+      </div>
+    </AppShell>
   );
 }
 

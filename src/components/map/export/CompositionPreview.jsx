@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   assertExportTitle,
-  buildLegendItems,
-  deriveLegendInsideMetrics,
-  fitLegendInsideForItems,
+  clampLegendColumns,
+  countLegendSymbolItems,
+  legendItemsFromSession,
   truncateTitleForPreview,
   validateLocationSelection,
 } from '@/lib/export';
@@ -12,36 +12,6 @@ import ExportLegend from './ExportLegend';
 import ExportLocationInsets from './ExportLocationInsets';
 import InstitutionalFooter from './InstitutionalFooter';
 import './exportComposition.css';
-
-function buildLocationLegendInput({
-  locations,
-  locationCount,
-  stateOnLegend,
-  showMunicipalMesh,
-  stateColor,
-  municipioColor,
-}) {
-  if (locationCount === 0) return null;
-  const first = locations?.[0];
-  if (!first?.uf) return null;
-
-  const result = {
-    stateColor,
-    municipioColor,
-  };
-
-  if (stateOnLegend) result.stateLabel = first.stateName || first.uf;
-  if (showMunicipalMesh) {
-    result.municipioLabel = first.municipioName || 'Malha municipal';
-  }
-
-  if (stateOnLegend || showMunicipalMesh) {
-    result.topicLabel = 'Convencoes cartograficas';
-  }
-
-  if (!result.stateLabel && !result.municipioLabel) return null;
-  return result;
-}
 
 function describeCollisions(collisions, elements) {
   const roleLabel = { north: 'Norte', scale: 'Escala', legend: 'Legenda' };
@@ -86,7 +56,7 @@ export function deriveExportReadiness(session) {
 
 export default function CompositionPreview({
   session,
-  onLegendInsideChange,
+  onLegendInsideChange: _onLegendInsideChange,
   onLegendRightWidthChange,
   onLegendItemOrderChange,
   onChromeChange,
@@ -97,7 +67,14 @@ export default function CompositionPreview({
   showMetricControls = false,
   showExportTrigger = false,
   onExportClick,
+  fixedDesktop = false,
+  interactive = true,
+  mapInteractive,
+  interactionRotation = 0,
+  rootTestId = 'export-composition-root',
 }) {
+  const rootRef = useRef(null);
+  const mapPanZoom = mapInteractive ?? interactive;
   const [tilesReady, setTilesReady] = useState(false);
   const [collisions, setCollisions] = useState([]);
   const collisionMessages = useMemo(
@@ -105,49 +82,43 @@ export default function CompositionPreview({
     [collisions, session.elements],
   );
 
-  const locationLegend = buildLocationLegendInput({
-    locations: session.locations,
-    locationCount: session.locationCount,
-    stateOnLegend: session.stateOnLegend,
-    showMunicipalMesh: session.showMunicipalMesh,
-    stateColor: session.stateColor,
-    municipioColor: session.municipioColor,
-  });
-
   const legendItems = useMemo(
-    () => buildLegendItems({
-      elements: session.elements,
-      hiddenIds: session.hiddenIds,
-      location: locationLegend,
-      order: session.legendItemOrder,
-      groupByTopic: session.legendGroupByTopic,
-      elementCategories: session.elementCategories,
-    }),
+    () => legendItemsFromSession(session),
     [
       session.elements,
       session.hiddenIds,
-      locationLegend,
+      session.locations,
+      session.locationCount,
+      session.stateOnLegend,
+      session.showMunicipalMesh,
+      session.brasilColor,
+      session.stateColor,
+      session.municipioColor,
       session.legendItemOrder,
       session.legendGroupByTopic,
       session.elementCategories,
     ],
+  );
+  const legendColumns = clampLegendColumns(
+    session.legendColumns,
+    countLegendSymbolItems(legendItems),
   );
 
   const readiness = deriveExportReadiness(session);
   const orientationClass = session.orientation === 'portrait'
     ? 'export-composition--portrait'
     : 'export-composition--landscape';
-  const showLegendRegion = session.legendPosition === 'bottom'
-    || session.legendPosition === 'right'
-    || (session.legendPosition === 'inside' && legendItems.length > 0);
+  const legendPosition = session.legendPosition === 'inside' ? 'right' : session.legendPosition;
+  const showLegendRegion = legendPosition === 'bottom' || legendPosition === 'right';
   const showLocationInsets = session.locationCount > 0;
-  const locationPlacement = session.legendPosition === 'right' ? 'bottom' : 'side';
-  const rightLegendMinWidth = Math.max(160, session.legendColumns * 120);
+  const locationPlacement = legendPosition === 'right' ? 'bottom' : 'side';
+  const fitRightLegend = legendPosition === 'right';
 
   const locationInsetsProps = {
     locationCount: session.locationCount,
     locations: session.locations,
     showMunicipalMesh: session.showMunicipalMesh,
+    brasilColor: session.brasilColor,
     stateColor: session.stateColor,
     municipioColor: session.municipioColor,
     onGeoLoadError,
@@ -163,31 +134,18 @@ export default function CompositionPreview({
     setCollisions(nextCollisions);
   }, []);
 
-  useEffect(() => {
-    if (session.legendPosition !== 'inside' || !onLegendInsideChange || legendItems.length === 0) return;
-    const needed = deriveLegendInsideMetrics(legendItems, {
-      columns: session.legendColumns,
-      fontPx: session.legendFontPx,
-    });
-    const current = session.legendInside;
-    if (needed.hPct <= current.hPct + 0.5 && needed.wPct <= current.wPct + 0.5) return;
-    onLegendInsideChange(fitLegendInsideForItems(current, legendItems, {
-      columns: session.legendColumns,
-      fontPx: session.legendFontPx,
-    }));
-  }, [
-    legendItems,
-    onLegendInsideChange,
-    session.legendColumns,
-    session.legendFontPx,
-    session.legendInside,
-    session.legendPosition,
-  ]);
+  void _onLegendInsideChange;
 
   return (
     <div
-      className={`export-composition ${orientationClass} export-composition--paper-${session.paper}`}
-      data-testid="export-composition-root"
+      ref={rootRef}
+      className={[
+        'export-composition',
+        orientationClass,
+        `export-composition--paper-${session.paper}`,
+        fixedDesktop ? 'export-composition--fixed-desktop' : '',
+      ].filter(Boolean).join(' ')}
+      data-testid={rootTestId}
       data-orientation={session.orientation}
       data-can-export={readiness.canExport ? 'true' : 'false'}
       data-tiles-ready={tilesReady ? 'true' : 'false'}
@@ -197,10 +155,10 @@ export default function CompositionPreview({
       </div>
 
       <div
-        className={`export-composition__body export-composition__body--legend-${session.legendPosition}`}
-        style={session.legendPosition === 'right'
-          ? { '--export-legend-side-min-width': `${rightLegendMinWidth}px` }
-          : undefined}
+        className={[
+          `export-composition__body export-composition__body--legend-${legendPosition}`,
+          fitRightLegend ? 'export-composition__body--legend-right-fit' : '',
+        ].filter(Boolean).join(' ')}
       >
         <div
           className={[
@@ -212,7 +170,7 @@ export default function CompositionPreview({
             className={[
               'export-composition__main-map-region',
               showLocationInsets && locationPlacement === 'side' ? 'export-composition__main-map-region--with-insets-side' : '',
-              session.legendPosition === 'right' ? 'export-composition__main-map-region--legend-right' : '',
+              legendPosition === 'right' ? 'export-composition__main-map-region--legend-right' : '',
             ].filter(Boolean).join(' ')}
           >
             <div className="export-composition__main-map-cell">
@@ -233,28 +191,15 @@ export default function CompositionPreview({
                 northSizePx={session.northSizePx}
                 scalePosition={session.scalePosition}
                 scaleSizePx={session.scaleSizePx}
-                interactive
-                onChromeChange={onChromeChange}
+                interactive={mapPanZoom}
+                onChromeChange={interactive ? onChromeChange : undefined}
                 onCollisionChange={handleCollisionChange}
                 onViewChange={onViewChange}
                 onTilesReadyChange={handleTilesReady}
                 onGeoLoadError={onGeoLoadError}
                 fetchFn={fetchFn}
+                interactionRotation={interactionRotation}
               />
-
-              {session.legendPosition === 'inside' && showLegendRegion ? (
-                <ExportLegend
-                  items={legendItems}
-                  legendPosition="inside"
-                  legendColumns={session.legendColumns}
-                  legendFontPx={session.legendFontPx}
-                  legendSpacing={session.legendSpacing}
-                  legendInside={session.legendInside}
-                  onLegendInsideChange={onLegendInsideChange}
-                  onLegendItemOrderChange={onLegendItemOrderChange}
-                  showMetricControls={showMetricControls}
-                />
-              ) : null}
 
               {collisionMessages.length > 0 ? (
                 <div
@@ -280,25 +225,25 @@ export default function CompositionPreview({
           ) : null}
         </div>
 
-        {session.legendPosition === 'right' && showLegendRegion ? (
+        {legendPosition === 'right' && showLegendRegion ? (
           <ExportLegend
             items={legendItems}
             legendPosition="right"
-            legendColumns={session.legendColumns}
+            legendColumns={legendColumns}
             legendFontPx={session.legendFontPx}
             legendSpacing={session.legendSpacing}
             legendRightWidthPct={session.legendRightWidthPct}
-            onLegendRightWidthChange={onLegendRightWidthChange}
-            onLegendItemOrderChange={onLegendItemOrderChange}
-            showMetricControls={showMetricControls}
+            onLegendRightWidthChange={interactive && !fitRightLegend ? onLegendRightWidthChange : undefined}
+            onLegendItemOrderChange={interactive ? onLegendItemOrderChange : undefined}
+            showMetricControls={interactive && showMetricControls && !fitRightLegend}
           />
         ) : null}
 
-        {session.legendPosition === 'bottom' && showLegendRegion ? (
+        {legendPosition === 'bottom' && showLegendRegion ? (
           <ExportLegend
             items={legendItems}
             legendPosition="bottom"
-            legendColumns={session.legendColumns}
+            legendColumns={legendColumns}
             legendFontPx={session.legendFontPx}
             legendSpacing={session.legendSpacing}
           />

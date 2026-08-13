@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/dialog';
 import { ArrowLeft, Globe, MapPin } from 'lucide-react';
 import LeafletMap from '@/components/map/LeafletMap';
+import { WORKSPACE_HEADER_CLASS } from '@/components/layout/identity';
+import { cn } from '@/lib/utils';
 
 export default function PublicMapView() {
   const { publicId } = useParams();
@@ -81,8 +83,7 @@ export default function PublicMapView() {
 
   return (
     <div className="h-screen flex flex-col bg-background font-inter">
-      <header className="bg-primary shrink-0">
-        <div className="px-4 py-3 flex items-center gap-3">
+      <header className={cn(WORKSPACE_HEADER_CLASS, 'flex items-center gap-3')}>
           <Button variant="ghost" size="icon" className="text-primary-foreground hover:bg-primary-foreground/20" asChild>
             <Link to="/gallery">
               <ArrowLeft className="w-5 h-5" />
@@ -99,7 +100,6 @@ export default function PublicMapView() {
               <p className="text-primary-foreground/80 text-xs truncate">{map.description}</p>
             )}
           </div>
-        </div>
       </header>
 
       <div className="flex-1 relative min-h-0">

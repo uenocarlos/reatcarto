@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function PasswordForgot() {
   const [email, setEmail] = useState('');
@@ -30,12 +30,7 @@ export default function PasswordForgot() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-primary p-4">
-      <Card className="w-full max-w-md shadow-2xl">
-        <CardHeader>
-          <CardTitle>Recuperar senha</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <AuthShell title="Recuperar senha">
           {submitted ? (
             <p role="status">
               Se existir conta para esse email, enviamos instruções. Verifique sua caixa de entrada.
@@ -62,8 +57,6 @@ export default function PasswordForgot() {
               Voltar ao login
             </Link>
           </p>
-        </CardContent>
-      </Card>
-    </div>
+    </AuthShell>
   );
 }

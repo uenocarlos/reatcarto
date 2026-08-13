@@ -218,7 +218,7 @@ function MovableControl({ kind, position, sizePx, onChange, anchor = 'left', chi
       ref={ref}
       className={[
         `export-map-control export-map-control--${kind}`,
-        anchor === 'right' ? 'export-map-control--anchor-right' : '',
+        anchor === 'right' ? 'export-map-control--anchor-right' : 'export-map-control--anchor-left',
         dragRef.current ? ' is-dragging' : '',
       ].filter(Boolean).join(' ')}
       data-collision-role={kind}
@@ -241,15 +241,30 @@ export const GRAPHIC_SCALE_OPTIONS = Object.freeze({
   showSubunits: false,
   lengthUnit: 'metric',
   position: 'bottomleft',
+  labelPlacement: 'top',
 });
 
 export function buildGraphicScaleOptions({ compact = false, maxWidth = 140 } = {}) {
   return {
     ...GRAPHIC_SCALE_OPTIONS,
     doubleLine: !compact,
-    minUnitWidth: compact ? 12 : 30,
+    minUnitWidth: compact ? Math.max(36, Math.round(maxWidth / 2.4)) : 50,
     maxUnitsWidth: maxWidth,
   };
+}
+
+function fitGraphicScaleToHost(host) {
+  if (!host) return;
+  const inner = host.querySelector('.leaflet-control-graphicscale-inner');
+  const units = inner?.querySelector('.units');
+  if (!inner || !units) return;
+  inner.style.transform = '';
+  const maxW = host.clientWidth;
+  const actualW = units.getBoundingClientRect().width;
+  if (maxW > 0 && actualW > maxW) {
+    inner.style.transformOrigin = 'left bottom';
+    inner.style.transform = `scale(${maxW / actualW})`;
+  }
 }
 
 function GraphicScaleControl({ map, maxWidth, compact, children }) {
@@ -260,6 +275,11 @@ function GraphicScaleControl({ map, maxWidth, compact, children }) {
     if (!map) return undefined;
     let cancelled = false;
     let control = null;
+    const fitTimers = [];
+
+    const scheduleFit = (delay = 0) => {
+      fitTimers.push(window.setTimeout(() => fitGraphicScaleToHost(hostRef.current), delay));
+    };
 
     (async () => {
       try {
@@ -272,14 +292,27 @@ function GraphicScaleControl({ map, maxWidth, compact, children }) {
         controlElement.classList.add('export-graphic-scale-control');
         hostRef.current.replaceChildren(controlElement);
         setPluginReady(true);
+        fitGraphicScaleToHost(hostRef.current);
+        scheduleFit(80);
+        scheduleFit(480);
       } catch {
         setPluginReady(false);
       }
     })();
 
+    const refit = () => {
+      fitGraphicScaleToHost(hostRef.current);
+      scheduleFit(450);
+    };
+    map.on?.('zoomend', refit);
+    map.on?.('moveend', refit);
+
     return () => {
       cancelled = true;
       setPluginReady(false);
+      fitTimers.forEach((timer) => window.clearTimeout(timer));
+      map.off?.('zoomend', refit);
+      map.off?.('moveend', refit);
       try {
         if (control) map.removeControl?.(control);
       } catch {
@@ -307,11 +340,11 @@ export function MapChromeOverlay({
   onChromeChange,
 }) {
   const map = useMap();
-  const chromeAnchor = compact ? 'right' : 'left';
-  const resolvedNorthPosition = northPosition ?? (compact ? { xPct: 5, yPct: 48 } : { xPct: 8, yPct: 68 });
+  const chromeAnchor = 'left';
+  const resolvedNorthPosition = northPosition ?? (compact ? { xPct: 70, yPct: 60 } : { xPct: 22, yPct: 68 });
   const resolvedNorthSize = northSizePx ?? (compact ? 42 : 70);
-  const resolvedScalePosition = scalePosition ?? (compact ? { xPct: 6, yPct: 63 } : { xPct: 3, yPct: 86 });
-  const resolvedScaleSize = scaleSizePx ?? (compact ? 90 : 140);
+  const resolvedScalePosition = scalePosition ?? (compact ? { xPct: 20, yPct: 85 } : { xPct: 18, yPct: 85 });
+  const resolvedScaleSize = scaleSizePx ?? (compact ? 96 : 70);
   const compactChromeStyle = compact
     ? {
       '--export-compact-scale-width': `${resolvedScaleSize}px`,
@@ -633,6 +666,151 @@ export function MapViewSync({ onViewChange }) {
       if (c && onViewChange) onViewChange({ center: { lat: c.lat, lng: c.lng }, zoom: z });
     },
   });
+  return null;
+}
+
+function screenDeltaToLocal(dx, dy, rotationDegrees) {
+  const rad = (rotationDegrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    dx: dx * cos + dy * sin,
+    dy: -dx * sin + dy * cos,
+  };
+}
+
+function clientToContainerPoint(container, clientX, clientY, rotationDegrees) {
+  const width = container.offsetWidth;
+  const height = container.offsetHeight;
+  const rect = container.getBoundingClientRect();
+  const rcx = rect.left + rect.width / 2;
+  const rcy = rect.top + rect.height / 2;
+  const sx = clientX - rcx;
+  const sy = clientY - rcy;
+  const rad = (-rotationDegrees * Math.PI) / 180;
+  const lx = sx * Math.cos(rad) - sy * Math.sin(rad);
+  const ly = sx * Math.sin(rad) + sy * Math.cos(rad);
+  return L.point(lx + width / 2, ly + height / 2);
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Corrige pan/pinch quando ancestrais aplicam rotate() na composição (preview mobile).
+ */
+export function MapRotatedInteraction({ rotationDegrees = 0 }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || !rotationDegrees) return undefined;
+
+    map.dragging?.disable?.();
+    map.touchZoom?.disable?.();
+    map.doubleClickZoom?.disable?.();
+    map.scrollWheelZoom?.disable?.();
+
+    const container = map.getContainer();
+    if (!container) return undefined;
+
+    let dragLast = null;
+    let pinchState = null;
+
+    const resetGesture = () => {
+      dragLast = null;
+      pinchState = null;
+    };
+
+    const onTouchStart = (event) => {
+      if (event.touches.length === 1) {
+        dragLast = {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+        };
+        pinchState = null;
+      } else if (event.touches.length === 2) {
+        pinchState = {
+          distance: touchDistance(event.touches),
+          zoom: map.getZoom(),
+        };
+        dragLast = null;
+      }
+    };
+
+    const onTouchMove = (event) => {
+      if (event.touches.length === 2 && pinchState) {
+        event.preventDefault();
+        const distance = touchDistance(event.touches);
+        if (distance <= 0 || pinchState.distance <= 0) return;
+
+        const scale = distance / pinchState.distance;
+        const newZoom = map.getScaleZoom(scale, pinchState.zoom);
+        const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+        const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+        const point = clientToContainerPoint(container, centerX, centerY, rotationDegrees);
+        const latlng = map.containerPointToLatLng(point);
+        map.setZoomAround(latlng, newZoom, { animate: false });
+        return;
+      }
+
+      if (event.touches.length !== 1 || !dragLast) return;
+      event.preventDefault();
+
+      const touch = event.touches[0];
+      const dx = touch.clientX - dragLast.x;
+      const dy = touch.clientY - dragLast.y;
+      dragLast = { x: touch.clientX, y: touch.clientY };
+
+      const local = screenDeltaToLocal(dx, dy, rotationDegrees);
+      map.panBy(L.point(-local.dx, -local.dy), { animate: false });
+    };
+
+    const onMouseDown = (event) => {
+      if (event.button !== 0) return;
+      dragLast = { x: event.clientX, y: event.clientY };
+      pinchState = null;
+      L.DomEvent.preventDefault(event);
+    };
+
+    const onMouseMove = (event) => {
+      if (!dragLast) return;
+      const dx = event.clientX - dragLast.x;
+      const dy = event.clientY - dragLast.y;
+      dragLast = { x: event.clientX, y: event.clientY };
+      const local = screenDeltaToLocal(dx, dy, rotationDegrees);
+      map.panBy(L.point(-local.dx, -local.dy), { animate: false });
+    };
+
+    const onMouseUp = () => resetGesture();
+
+    container.addEventListener('touchstart', onTouchStart, { passive: true });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', resetGesture);
+    container.addEventListener('touchcancel', resetGesture);
+    L.DomEvent.on(container, 'mousedown', onMouseDown);
+    L.DomEvent.on(document, 'mousemove', onMouseMove);
+    L.DomEvent.on(document, 'mouseup', onMouseUp);
+
+    return () => {
+      container.removeEventListener('touchstart', onTouchStart);
+      container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('touchend', resetGesture);
+      container.removeEventListener('touchcancel', resetGesture);
+      L.DomEvent.off(container, 'mousedown', onMouseDown);
+      L.DomEvent.off(document, 'mousemove', onMouseMove);
+      L.DomEvent.off(document, 'mouseup', onMouseUp);
+      resetGesture();
+
+      map.dragging?.enable?.();
+      map.touchZoom?.enable?.();
+      map.doubleClickZoom?.enable?.();
+      map.scrollWheelZoom?.enable?.();
+    };
+  }, [map, rotationDegrees]);
+
   return null;
 }
 

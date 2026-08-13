@@ -506,6 +506,7 @@ function maps_delete(array $user, array $input, bool $forceVersion = false): arr
     }
 
     photos_delete_for_map($mapId);
+    videos_delete_for_map($mapId);
     db()->prepare('DELETE FROM maps WHERE id = :id')->execute(['id' => $mapId]);
 
     $result = ['success' => true, 'deleted' => true];

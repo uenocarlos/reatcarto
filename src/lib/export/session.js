@@ -1,11 +1,11 @@
 import {
-  BASEMAP_TILE_URLS,
   DEFAULT_DPI,
   DEFAULT_FORMAT,
   DEFAULT_LEGEND_COLUMNS,
   DEFAULT_LEGEND_FONT_PX,
   DEFAULT_LEGEND_POSITION,
   DEFAULT_LEGEND_SPACING,
+  DEFAULT_BRASIL_COLOR,
   DEFAULT_MUNICIPIO_COLOR,
   DEFAULT_ORIENTATION,
   DEFAULT_PAPER,
@@ -18,7 +18,8 @@ import {
   MAX_DPI,
   MIN_DPI,
 } from './constants.js';
-import { buildLegendItems } from './legendItems.js';
+import { getBasemapTileProps, normalizeBasemapId } from '@/lib/basemaps';
+import { buildLegendItems, suggestLegendColumns } from './legendItems.js';
 
 /**
  * @typedef {Object} EditorExportSnapshot
@@ -39,7 +40,7 @@ import { buildLegendItems } from './legendItems.js';
  * @property {'a4'|'a3'|'letter'} paper
  * @property {'landscape'|'portrait'} orientation
  * @property {number} dpi
- * @property {'inside'|'right'|'bottom'} legendPosition
+ * @property {'right'|'bottom'} legendPosition
  * @property {number} legendColumns
  * @property {number} legendFontPx
  * @property {string} legendSpacing
@@ -54,6 +55,7 @@ import { buildLegendItems } from './legendItems.js';
  * @property {Array<{ uf: string|null, stateName?: string|null, municipioCode: string|null, municipioName?: string|null }>} locations
  * @property {boolean} showMunicipalMesh
  * @property {boolean} stateOnLegend
+ * @property {string} brasilColor
  * @property {string} stateColor
  * @property {string} municipioColor
  * @property {{ lat: number, lng: number }} center
@@ -64,27 +66,24 @@ import { buildLegendItems } from './legendItems.js';
  * @property {string|null} geoLoadError
  */
 
-const DEFAULT_NORTH_POSITION = Object.freeze({ xPct: 8, yPct: 68 });
-const DEFAULT_SCALE_POSITION = Object.freeze({ xPct: 3, yPct: 86 });
+const DEFAULT_NORTH_POSITION = Object.freeze({ xPct: 11, yPct: 68 });
+const DEFAULT_SCALE_POSITION = Object.freeze({ xPct: 8, yPct: 86 });
 
 export function deriveDefaultLegendLayout(elements = [], hiddenIds = new Set()) {
   const items = buildLegendItems({ elements, hiddenIds, groupByTopic: true });
   const itemCount = items.filter((item) => item.symbolKind !== 'topic').length;
   const topicCount = items.length - itemCount;
 
-  let columns = 1;
+  const columns = suggestLegendColumns(itemCount);
   let fontPx = 12;
   let widthPct = 30;
   if (itemCount > 6 && itemCount <= 14) {
-    columns = 2;
     fontPx = 11;
     widthPct = 46;
   } else if (itemCount > 14 && itemCount <= 27) {
-    columns = 3;
     fontPx = 10;
     widthPct = 64;
   } else if (itemCount > 27) {
-    columns = Math.min(6, Math.max(4, Math.ceil(itemCount / 10)));
     fontPx = itemCount > 50 ? 8 : 9;
     widthPct = Math.min(92, columns * 17);
   }
@@ -95,13 +94,29 @@ export function deriveDefaultLegendLayout(elements = [], hiddenIds = new Set()) 
     columns,
     fontPx,
     spacing: itemCount > 27 ? 'very_compact' : itemCount > 14 ? 'compact' : 'normal',
-    inside: {
-      xPct: 100 - insideMetrics.wPct - 3,
-      yPct: 100 - insideMetrics.hPct - 3,
-      wPct: insideMetrics.wPct,
-      hPct: insideMetrics.hPct,
-    },
+    inside: anchorLegendInsideBottomRight(insideMetrics),
     itemCount,
+  };
+}
+
+const LEGEND_INSIDE_MARGIN_PCT = 3;
+
+/**
+ * Place an inside-legend box in the bottom-right corner with a small margin.
+ * @param {{ wPct: number, hPct: number }} size
+ * @param {{ marginPct?: number }} [options]
+ */
+export function anchorLegendInsideBottomRight(size, options = {}) {
+  const marginPct = Number.isFinite(Number(options.marginPct))
+    ? Number(options.marginPct)
+    : LEGEND_INSIDE_MARGIN_PCT;
+  const wPct = Math.max(12, Math.min(90, Number(size?.wPct) || 30));
+  const hPct = Math.max(12, Math.min(90, Number(size?.hPct) || 18));
+  return {
+    xPct: Math.max(0, 100 - wPct - marginPct),
+    yPct: Math.max(0, 100 - hPct - marginPct),
+    wPct,
+    hPct,
   };
 }
 
@@ -113,13 +128,14 @@ export function deriveDefaultLegendLayout(elements = [], hiddenIds = new Set()) 
 export function deriveLegendInsideMetrics(items = [], options = {}) {
   const columns = Math.max(1, Number(options.columns) || 1);
   const fontPx = Math.max(8, Number(options.fontPx) || 12);
-  const mapHeightPx = Math.max(200, Number(options.mapHeightPx) || 420);
+  // Prefer a conservative (smaller) map height so % height is generous enough.
+  const mapHeightPx = Math.max(200, Number(options.mapHeightPx) || 360);
   const itemCount = items.filter((item) => item.symbolKind !== 'topic').length;
   const topicCount = items.filter((item) => item.symbolKind === 'topic').length;
-  const itemRows = Math.max(1, Math.ceil(itemCount / columns));
-  const rowHeight = fontPx + 16;
-  const estimatedHeightPx = 42 + itemRows * rowHeight + topicCount * (fontPx + 10);
-  const hPct = Math.max(18, Math.min(90, Math.ceil((estimatedHeightPx / mapHeightPx) * 100)));
+  const itemRows = Math.max(1, Math.ceil(Math.max(itemCount, 1) / columns));
+  const rowHeight = fontPx + 18;
+  const estimatedHeightPx = 52 + itemRows * rowHeight + topicCount * (fontPx + 14);
+  const hPct = Math.max(18, Math.min(90, Math.ceil((estimatedHeightPx / mapHeightPx) * 100) + 2));
 
   let wPct = 30;
   if (itemCount > 6 && itemCount <= 14) wPct = 46;
@@ -131,17 +147,38 @@ export function deriveLegendInsideMetrics(items = [], options = {}) {
 
 /**
  * Grow inside-legend metrics when new items require more room.
+ * Prefers keeping (or restoring) the bottom-right corner so the full box stays visible.
  * @param {{ xPct: number, yPct: number, wPct: number, hPct: number }} currentInside
  * @param {Array<{ symbolKind?: string }>} items
- * @param {{ columns?: number, fontPx?: number, mapHeightPx?: number }} [options]
+ * @param {{ columns?: number, fontPx?: number, mapHeightPx?: number, marginPct?: number, anchor?: 'bottom-right'|'preserve' }} [options]
  */
 export function fitLegendInsideForItems(currentInside, items, options = {}) {
+  const marginPct = Number.isFinite(Number(options.marginPct))
+    ? Number(options.marginPct)
+    : LEGEND_INSIDE_MARGIN_PCT;
   const needed = deriveLegendInsideMetrics(items, options);
   const wPct = Math.max(Number(currentInside?.wPct) || needed.wPct, needed.wPct);
   const hPct = Math.max(Number(currentInside?.hPct) || needed.hPct, needed.hPct);
-  const xPct = Math.max(0, Math.min(100 - wPct, Number(currentInside?.xPct) || 0));
-  const yPct = Math.max(0, Math.min(100 - hPct, Number(currentInside?.yPct) || 0));
-  return { xPct, yPct, wPct, hPct };
+  const currentX = Number(currentInside?.xPct);
+  const currentY = Number(currentInside?.yPct);
+  const wouldClipBottom =
+    !Number.isFinite(currentY) || currentY + hPct > 100 - marginPct + 0.5;
+  const wouldClipRight =
+    !Number.isFinite(currentX) || currentX + wPct > 100 - marginPct + 0.5;
+  const preferBottomRight =
+    options.anchor === 'bottom-right'
+    || ((options.anchor !== 'preserve') && (wouldClipBottom || wouldClipRight));
+
+  if (preferBottomRight) {
+    return anchorLegendInsideBottomRight({ wPct, hPct }, { marginPct });
+  }
+
+  return {
+    xPct: Math.max(0, Math.min(100 - wPct, currentX)),
+    yPct: Math.max(0, Math.min(100 - hPct, currentY)),
+    wPct,
+    hPct,
+  };
 }
 
 /**
@@ -202,7 +239,7 @@ export function createDefaultExportSession(snapshot) {
     northPosition: { ...DEFAULT_NORTH_POSITION },
     northSizePx: 70,
     scalePosition: { ...DEFAULT_SCALE_POSITION },
-    scaleSizePx: 140,
+    scaleSizePx: 200,
     hiddenIds,
     showLabels: false,
     basemap: mapEditorBasemapToExport(snapshot.basemap),
@@ -210,6 +247,7 @@ export function createDefaultExportSession(snapshot) {
     locations: [{ uf: null, municipioCode: null }, { uf: null, municipioCode: null }],
     showMunicipalMesh: false,
     stateOnLegend: false,
+    brasilColor: DEFAULT_BRASIL_COLOR,
     stateColor: DEFAULT_STATE_COLOR,
     municipioColor: DEFAULT_MUNICIPIO_COLOR,
     center: { ...snapshot.center },
@@ -253,9 +291,7 @@ export function assertExportTitle(title) {
  * @returns {'branco'|'osm'|'satelite'}
  */
 export function mapEditorBasemapToExport(basemap) {
-  const key = String(basemap ?? '').toLowerCase();
-  if (key === 'branco' || key === 'osm' || key === 'satelite') return key;
-  return 'branco';
+  return normalizeBasemapId(basemap);
 }
 
 /**
@@ -263,8 +299,15 @@ export function mapEditorBasemapToExport(basemap) {
  * @returns {string}
  */
 export function resolveBasemapTileUrl(basemap) {
-  const key = mapEditorBasemapToExport(basemap);
-  return BASEMAP_TILE_URLS[key];
+  return getBasemapTileProps(basemap).url;
+}
+
+/**
+ * TileLayer props for export preview/capture.
+ * @param {unknown} basemap
+ */
+export function getBasemapTileLayerProps(basemap) {
+  return getBasemapTileProps(basemap, { forExport: true });
 }
 
 /**
@@ -295,12 +338,16 @@ export function truncateTitleForPreview(title) {
 
 /**
  * @param {unknown} columns
+ * @param {unknown} [itemCount]
  * @returns {number}
  */
-export function clampLegendColumns(columns) {
+export function clampLegendColumns(columns, itemCount) {
+  const maxAllowed = Number.isFinite(Number(itemCount))
+    ? Math.max(LEGEND_COLUMNS_MIN, Math.min(LEGEND_COLUMNS_MAX, Math.max(1, Math.round(Number(itemCount)) || 1)))
+    : LEGEND_COLUMNS_MAX;
   const num = Number(columns);
-  if (!Number.isFinite(num)) return DEFAULT_LEGEND_COLUMNS;
-  return Math.min(LEGEND_COLUMNS_MAX, Math.max(LEGEND_COLUMNS_MIN, Math.round(num)));
+  if (!Number.isFinite(num)) return Math.min(maxAllowed, DEFAULT_LEGEND_COLUMNS);
+  return Math.min(maxAllowed, Math.max(LEGEND_COLUMNS_MIN, Math.round(num)));
 }
 
 /**
@@ -354,10 +401,11 @@ export function setDpi(session, dpi) {
 /**
  * @param {ExportSessionState} session
  * @param {number} columns
+ * @param {number} [itemCount]
  * @returns {ExportSessionState}
  */
-export function setLegendColumns(session, columns) {
-  return { ...session, legendColumns: clampLegendColumns(columns) };
+export function setLegendColumns(session, columns, itemCount) {
+  return { ...session, legendColumns: clampLegendColumns(columns, itemCount) };
 }
 
 /**

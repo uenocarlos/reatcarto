@@ -1,8 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, GeoJSON, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { filterPolygonFeatures } from './geoPolygonUtils';
+import { filterPolygonFeatures, computeBrazilOverviewBbox } from './geoPolygonUtils';
 import { GraticuleOverlay, MapChromeOverlay, MapInvalidateSize } from './MapChrome';
+import { DEFAULT_BRASIL_COLOR, DEFAULT_MUNICIPIO_COLOR, DEFAULT_STATE_COLOR } from '@/lib/export/constants';
+
+const OVERVIEW_INSET_PADDING = [2, 2];
+const DETAIL_INSET_PADDING = [16, 16];
+const INSET_POLYGON_BORDER = '#1e2937';
+
+function solidFillStyle(fillColor, borderColor = INSET_POLYGON_BORDER) {
+  return {
+    color: borderColor,
+    weight: 1.25,
+    opacity: 1,
+    fillColor,
+    fillOpacity: 1,
+  };
+}
 
 const MUNICIPIOS_FILE_BY_UF = Object.freeze({
   AC: 'ac',
@@ -82,7 +97,12 @@ function filterMunicipioFeature(collection, municipioCode) {
   return filterPolygonFeatures({ type: 'FeatureCollection', features });
 }
 
-function FitBoundsAndResize({ bounds, fallbackCenter = [-14.235, -51.9253], fallbackZoom = 4 }) {
+function FitBoundsAndResize({
+  bounds,
+  padding = [16, 16],
+  fallbackCenter = [-14.235, -51.9253],
+  fallbackZoom = 4,
+}) {
   const map = useMap();
 
   useEffect(() => {
@@ -92,7 +112,7 @@ function FitBoundsAndResize({ bounds, fallbackCenter = [-14.235, -51.9253], fall
       try {
         map.invalidateSize?.({ animate: false });
         if (bounds?.isValid?.()) {
-          map.fitBounds(bounds, { padding: [16, 16], animate: false });
+          map.fitBounds(bounds, { padding, animate: false });
         } else {
           map.setView(fallbackCenter, fallbackZoom, { animate: false });
         }
@@ -108,9 +128,22 @@ function FitBoundsAndResize({ bounds, fallbackCenter = [-14.235, -51.9253], fall
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [map, bounds, fallbackCenter, fallbackZoom]);
+  }, [map, bounds, padding, fallbackCenter, fallbackZoom]);
 
   return null;
+}
+
+function bboxToLeafletBounds(bbox) {
+  if (!bbox) return null;
+  try {
+    const bounds = L.latLngBounds(
+      [bbox.minLat, bbox.minLng],
+      [bbox.maxLat, bbox.maxLng],
+    );
+    return bounds.isValid() ? bounds : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildBounds(data) {
@@ -127,6 +160,7 @@ function InsetMap({
   brasilGeoJson,
   statesGeoJson,
   municipiosGeoJson,
+  brasilColor,
   stateColor,
   municipioColor,
 }) {
@@ -136,15 +170,15 @@ function InsetMap({
     [municipiosGeoJson, inset.municipioCode],
   );
 
-  const contextData = inset.kind === 'overview'
-    ? filterPolygonFeatures(brasilGeoJson)
-    : filterPolygonFeatures(statesGeoJson);
+  const brasilData = useMemo(() => filterPolygonFeatures(brasilGeoJson), [brasilGeoJson]);
+  const statesContext = useMemo(() => filterPolygonFeatures(statesGeoJson), [statesGeoJson]);
+  const contextData = inset.kind === 'overview' ? brasilData : statesContext;
   const bounds = useMemo(() => {
+    if (inset.kind === 'overview') return bboxToLeafletBounds(computeBrazilOverviewBbox(brasilData));
     if (inset.kind === 'detail' && municipioFeature.features.length) return buildBounds(municipioFeature);
-    if (inset.kind === 'overview') return buildBounds(contextData);
     if (stateFeature.features.length) return buildBounds(stateFeature);
     return buildBounds(contextData);
-  }, [contextData, municipioFeature, stateFeature, inset.kind]);
+  }, [brasilData, contextData, municipioFeature, stateFeature, inset.kind]);
 
   const label = inset.kind === 'overview'
     ? `Brasil · ${inset.stateName || resolveStateName(stateFeature?.features?.[0], inset.uf || 'UF')}`
@@ -159,12 +193,20 @@ function InsetMap({
           zoom={7}
           scrollWheelZoom={false}
           dragging={false}
+          doubleClickZoom={false}
+          touchZoom={false}
+          boxZoom={false}
+          keyboard={false}
           zoomControl={false}
           attributionControl={false}
           className="export-location-inset__map"
           data-testid={`export-location-inset-map-${inset.id}`}
         >
-          <FitBoundsAndResize bounds={bounds} />
+          <FitBoundsAndResize
+            bounds={bounds}
+            padding={inset.kind === 'overview' ? OVERVIEW_INSET_PADDING : DETAIL_INSET_PADDING}
+            fallbackZoom={inset.kind === 'overview' ? 4 : 6}
+          />
           <MapInvalidateSize />
           <TileLayer
             url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -172,43 +214,33 @@ function InsetMap({
           />
           <GraticuleOverlay />
 
-          {contextData?.features?.length ? (
+          {inset.kind === 'overview' && brasilData?.features?.length ? (
             <GeoJSON
-              data={contextData}
+              key={`brasil-${brasilColor}`}
+              data={brasilData}
               filter={polygonFilter}
-              style={() => ({
-                // Mantem o enquadramento geografico sem desenhar o contorno do Brasil.
-                color: 'transparent',
-                weight: 0,
-                fillColor: '#f8fafc',
-                fillOpacity: inset.kind === 'overview' ? 0.22 : 0.14,
-              })}
+              interactive={false}
+              style={() => solidFillStyle(brasilColor)}
             />
           ) : null}
 
           {stateFeature?.features?.length ? (
             <GeoJSON
+              key={`state-${inset.kind}-${stateColor}`}
               data={stateFeature}
               filter={polygonFilter}
-              style={() => ({
-                color: 'transparent',
-                weight: 0,
-                fillColor: stateColor,
-                fillOpacity: inset.kind === 'overview' ? 0.5 : 0.2,
-              })}
+              interactive={false}
+              style={() => solidFillStyle(stateColor)}
             />
           ) : null}
 
           {inset.kind === 'detail' && municipioFeature?.features?.length ? (
             <GeoJSON
+              key={`municipio-${municipioColor}`}
               data={municipioFeature}
               filter={polygonFilter}
-              style={() => ({
-                color: 'transparent',
-                weight: 0,
-                fillColor: municipioColor,
-                fillOpacity: 0.62,
-              })}
+              interactive={false}
+              style={() => solidFillStyle(municipioColor)}
             />
           ) : null}
           <MapChromeOverlay compact />
@@ -221,8 +253,9 @@ function InsetMap({
 export default function ExportLocationInsets({
   locationCount = 0,
   locations = [],
-  stateColor = '#D9E6A4',
-  municipioColor = '#E6A4A4',
+  brasilColor = DEFAULT_BRASIL_COLOR,
+  stateColor = DEFAULT_STATE_COLOR,
+  municipioColor = DEFAULT_MUNICIPIO_COLOR,
   placement = 'side',
   onGeoLoadError,
   onGeoLoadSuccess,
@@ -355,6 +388,7 @@ export default function ExportLocationInsets({
           brasilGeoJson={brasilGeoJson}
           statesGeoJson={statesGeoJson}
           municipiosGeoJson={municipiosGeoJsonByUf?.[String(inset.uf ?? '').trim().toUpperCase()] ?? null}
+          brasilColor={brasilColor}
           stateColor={stateColor}
           municipioColor={municipioColor}
         />

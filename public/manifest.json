@@ -3,6 +3,7 @@
   "short_name": "ReatCarto",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#ffffff",
   "theme_color": "#0f766e",
   "icons": [

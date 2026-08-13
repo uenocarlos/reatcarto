@@ -9,7 +9,12 @@ const phpBinary = configuredPhp
 
 const php = spawn(
   phpBinary,
-  ['-d', `session.save_path=${tmpdir()}`, '-S', 'localhost:8080'],
+  [
+    '-d', `session.save_path=${tmpdir()}`,
+    '-d', 'upload_max_filesize=25M',
+    '-d', 'post_max_size=30M',
+    '-S', 'localhost:8080',
+  ],
   { cwd: process.cwd(), stdio: 'inherit' },
 );
 

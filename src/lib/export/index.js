@@ -16,6 +16,7 @@ export {
   MIN_DPI,
   MAX_DPI,
   BASEMAP_TILE_URLS,
+  MAP_MAX_ZOOM,
   PREVIEW_DEBOUNCE_MS,
   LEGEND_SPACING_VALUES,
   LEGEND_COLUMNS_MIN,
@@ -31,6 +32,7 @@ export {
   assertExportTitle,
   mapEditorBasemapToExport,
   resolveBasemapTileUrl,
+  getBasemapTileLayerProps,
   buildExportFileName,
   truncateTitleForPreview,
   clampLegendColumns,
@@ -45,6 +47,7 @@ export {
   deriveDefaultLegendLayout,
   deriveLegendInsideMetrics,
   fitLegendInsideForItems,
+  anchorLegendInsideBottomRight,
 } from './session.js';
 
 export {
@@ -53,6 +56,12 @@ export {
   withLegendTopics,
   categoryBucket,
   LEGEND_TOPIC_DEFS,
+  prioritizeLegendSymbols,
+  countLegendSymbolItems,
+  suggestLegendColumns,
+  legendColumnRangeForItemCount,
+  buildLocationLegendInput,
+  legendItemsFromSession,
 } from './legendItems.js';
 
 export { createPreviewSync, flushPreviewSync } from './previewSync.js';
@@ -77,3 +86,12 @@ export {
   waitForTilesReady,
   mapCaptureError,
 } from './generateExport.js';
+
+export {
+  EXPORT_COMPOSITION_LANDSCAPE_WIDTH,
+  EXPORT_COMPOSITION_PORTRAIT_WIDTH,
+  EXPORT_COMPOSITION_MAP_HEIGHT,
+  EXPORT_COMPOSITION_LOCATION_INSET_SIZE,
+  getFixedCompositionWidth,
+  getFixedCompositionStyle,
+} from './compositionDimensions.js';

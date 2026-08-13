@@ -3,8 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function PasswordReset() {
   const [searchParams] = useSearchParams();
@@ -37,12 +37,7 @@ export default function PasswordReset() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-primary p-4">
-      <Card className="w-full max-w-md shadow-2xl">
-        <CardHeader>
-          <CardTitle>Nova senha</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <AuthShell title="Nova senha">
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
             <div>
               <label htmlFor="password" className="text-sm font-medium">
@@ -87,8 +82,6 @@ export default function PasswordReset() {
               Voltar ao login
             </Link>
           </p>
-        </CardContent>
-      </Card>
-    </div>
+    </AuthShell>
   );
 }

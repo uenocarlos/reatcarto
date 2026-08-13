@@ -16,13 +16,14 @@ import {
 import { Slider } from '@/components/ui/slider';
 import { BASEMAP_OPTIONS } from '@/components/map/ElementLayersPanel';
 import {
-  LEGEND_COLUMNS_MAX,
-  LEGEND_COLUMNS_MIN,
   LEGEND_FONT_MAX,
   LEGEND_FONT_MIN,
   LEGEND_SPACING_VALUES,
   MAX_DPI,
   MIN_DPI,
+  countLegendSymbolItems,
+  legendColumnRangeForItemCount,
+  legendItemsFromSession,
   setFormat,
   setDpi,
   setLegendColumns,
@@ -35,6 +36,7 @@ import {
 import {
   buildCategoryGroups,
 } from '@/lib/export/layerGrouping';
+import { DEFAULT_BRASIL_COLOR, DEFAULT_MUNICIPIO_COLOR, DEFAULT_STATE_COLOR } from '@/lib/export/constants';
 
 const SPACING_LABELS = {
   very_compact: 'Muito compacto',
@@ -43,11 +45,6 @@ const SPACING_LABELS = {
   loose: 'Solto',
   very_loose: 'Muito solto',
 };
-
-const COLUMN_OPTIONS = Array.from(
-  { length: LEGEND_COLUMNS_MAX - LEGEND_COLUMNS_MIN + 1 },
-  (_, i) => LEGEND_COLUMNS_MIN + i,
-);
 
 const FONT_OPTIONS = Array.from(
   { length: LEGEND_FONT_MAX - LEGEND_FONT_MIN + 1 },
@@ -81,6 +78,7 @@ export default function ExportControlsPanel({
   session,
   onSessionChange,
   titleError = null,
+  isMobile = false,
 }) {
   const [geoOptions, setGeoOptions] = useState({ states: [], municipalities: [] });
   const patch = (partial) => onSessionChange((prev) => ({ ...prev, ...partial }));
@@ -88,6 +86,31 @@ export default function ExportControlsPanel({
     () => buildCategoryGroups(session.elements, session.elementCategories),
     [session.elements, session.elementCategories],
   );
+  const legendItems = useMemo(
+    () => legendItemsFromSession(session),
+    [
+      session.elements,
+      session.hiddenIds,
+      session.locations,
+      session.locationCount,
+      session.stateOnLegend,
+      session.showMunicipalMesh,
+      session.brasilColor,
+      session.stateColor,
+      session.municipioColor,
+      session.legendItemOrder,
+      session.legendGroupByTopic,
+      session.elementCategories,
+    ],
+  );
+  const legendItemCount = countLegendSymbolItems(legendItems);
+  const columnRange = legendColumnRangeForItemCount(legendItemCount);
+
+  useEffect(() => {
+    if (session.legendColumns > columnRange.max) {
+      onSessionChange((prev) => setLegendColumns(prev, columnRange.max, legendItemCount));
+    }
+  }, [columnRange.max, legendItemCount, onSessionChange, session.legendColumns]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +239,11 @@ export default function ExportControlsPanel({
     municipioCode: null,
     municipioName: null,
   };
+  const legendPositionOptions = [
+    { value: 'right', label: 'À direita' },
+    { value: 'bottom', label: 'Abaixo' },
+  ];
+  const legendPosition = session.legendPosition === 'inside' ? 'right' : session.legendPosition;
   const availableMunicipios = useMemo(
     () => filterMunicipalitiesByUf(geoOptions.municipalities, primaryLocation.uf)
       .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
@@ -316,43 +344,41 @@ export default function ExportControlsPanel({
                 <Label htmlFor="export-orientation-portrait">Retrato</Label>
               </div>
             </RadioGroup>
-            <div className="space-y-2">
-              <Label htmlFor="export-dpi-input">DPI ({session.dpi})</Label>
-              <Slider
-                id="export-dpi-slider"
-                data-testid="export-dpi-slider"
-                min={MIN_DPI}
-                max={MAX_DPI}
-                step={1}
-                value={[session.dpi]}
-                onValueChange={([value]) => onSessionChange((prev) => setDpi(prev, value))}
-              />
-              <Input
-                id="export-dpi-input"
-                data-testid="export-dpi-input"
-                type="number"
-                min={MIN_DPI}
-                max={MAX_DPI}
-                value={session.dpi}
-                onChange={(e) => onSessionChange((prev) => setDpi(prev, e.target.value))}
-              />
-            </div>
+            {!isMobile ? (
+              <div className="space-y-2">
+                <Label htmlFor="export-dpi-input">DPI ({session.dpi})</Label>
+                <Slider
+                  id="export-dpi-slider"
+                  data-testid="export-dpi-slider"
+                  min={MIN_DPI}
+                  max={MAX_DPI}
+                  step={1}
+                  value={[session.dpi]}
+                  onValueChange={([value]) => onSessionChange((prev) => setDpi(prev, value))}
+                />
+                <Input
+                  id="export-dpi-input"
+                  data-testid="export-dpi-input"
+                  type="number"
+                  min={MIN_DPI}
+                  max={MAX_DPI}
+                  value={session.dpi}
+                  onChange={(e) => onSessionChange((prev) => setDpi(prev, e.target.value))}
+                />
+              </div>
+            ) : null}
           </div>
         </ControlGroup>
 
         <ControlGroup title="Legenda" testId="export-control-group-legenda">
           <div className="space-y-3">
             <RadioGroup
-              value={session.legendPosition}
+              value={legendPosition}
               onValueChange={(value) => patch({ legendPosition: value })}
               className="space-y-1.5"
               data-testid="export-legend-position-radio"
             >
-              {[
-                { value: 'inside', label: 'Dentro do mapa' },
-                { value: 'right', label: 'À direita' },
-                { value: 'bottom', label: 'Abaixo' },
-              ].map((opt) => (
+              {legendPositionOptions.map((opt) => (
                 <div key={opt.value} className="flex items-center gap-2">
                   <RadioGroupItem value={opt.value} id={`export-legend-${opt.value}`} />
                   <Label htmlFor={`export-legend-${opt.value}`}>{opt.label}</Label>
@@ -363,18 +389,21 @@ export default function ExportControlsPanel({
               <div className="space-y-1">
                 <Label htmlFor="export-legend-columns">Colunas</Label>
                 <Select
-                  value={String(session.legendColumns)}
-                  onValueChange={(value) => onSessionChange((prev) => setLegendColumns(prev, value))}
+                  value={String(Math.min(session.legendColumns, columnRange.max))}
+                  onValueChange={(value) => onSessionChange((prev) => setLegendColumns(prev, value, legendItemCount))}
                 >
                   <SelectTrigger id="export-legend-columns" data-testid="export-legend-columns-input">
                     <SelectValue placeholder="Colunas" />
                   </SelectTrigger>
                   <SelectContent>
-                    {COLUMN_OPTIONS.map((n) => (
+                    {columnRange.options.map((n) => (
                       <SelectItem key={n} value={String(n)}>{n}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground" data-testid="export-legend-item-count">
+                  {legendItemCount === 1 ? '1 item na legenda' : `${legendItemCount} itens na legenda`}
+                </p>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="export-legend-font">Fonte (px)</Label>
@@ -627,26 +656,38 @@ export default function ExportControlsPanel({
                   />
                   Malha do estado
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
                   <div className="space-y-1">
-                    <Label htmlFor="export-state-color">Cor UF</Label>
+                    <Label htmlFor="export-brasil-color">Cor Brasil</Label>
                     <Input
-                      id="export-state-color"
-                      data-testid="export-state-color"
+                      id="export-brasil-color"
+                      data-testid="export-brasil-color"
                       type="color"
-                      value={session.stateColor}
-                      onChange={(e) => patch({ stateColor: e.target.value })}
+                      value={session.brasilColor || DEFAULT_BRASIL_COLOR}
+                      onChange={(e) => patch({ brasilColor: e.target.value })}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="export-municipio-color">Cor municipio</Label>
-                    <Input
-                      id="export-municipio-color"
-                      data-testid="export-municipio-color"
-                      type="color"
-                      value={session.municipioColor}
-                      onChange={(e) => patch({ municipioColor: e.target.value })}
-                    />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="export-state-color">Cor UF</Label>
+                      <Input
+                        id="export-state-color"
+                        data-testid="export-state-color"
+                        type="color"
+                        value={session.stateColor || DEFAULT_STATE_COLOR}
+                        onChange={(e) => patch({ stateColor: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="export-municipio-color">Cor municipio</Label>
+                      <Input
+                        id="export-municipio-color"
+                        data-testid="export-municipio-color"
+                        type="color"
+                        value={session.municipioColor || DEFAULT_MUNICIPIO_COLOR}
+                        onChange={(e) => patch({ municipioColor: e.target.value })}
+                      />
+                    </div>
                   </div>
                 </div>
               </>

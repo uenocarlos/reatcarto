@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import CompositionPreview, { deriveExportReadiness } from '@/components/map/export/CompositionPreview';
 import {
   createDefaultExportSession,
@@ -62,36 +62,25 @@ describe('export composition integration', () => {
     expect(screen.queryAllByTestId('export-legend-item')).toHaveLength(0);
   });
 
-  it('IT-019: numeric legend width and drag metrics share the same session path', async () => {
+  it('IT-019: multi-column right legend fits content without wrapping', () => {
     const snapshot = createEditorExportSnapshot({
       mapName: 'Mapa',
-      elements: [sampleElement('e1', 'Ponto')],
+      elements: [sampleElement('e1', 'Ponto A'), sampleElement('e2', 'Ponto B longo')],
     });
     const base = {
       ...createDefaultExportSession(snapshot),
       legendPosition: 'right',
+      legendColumns: 2,
       title: 'Mapa',
     };
 
     render(<CompositionHarness initialSession={base} />);
 
-    fireEvent.change(screen.getByTestId('export-legend-width-input'), { target: { value: '32' } });
-    await waitFor(() => {
-      expect(screen.getByTestId('export-legend')).toHaveStyle({ width: '32%' });
-    });
-
-    const handle = screen.getByTestId('export-legend-resize-handle');
-    fireEvent.pointerDown(handle, { clientX: 400 });
-    fireEvent.pointerMove(handle, { clientX: 280 });
-    fireEvent.pointerUp(handle);
-
-    await waitFor(() => {
-      // width grows when drag handle moves left (right-legend resize)
-      const style = screen.getByTestId('export-legend').getAttribute('style') || '';
-      const match = /width:\s*([\d.]+)%/.exec(style);
-      expect(match).toBeTruthy();
-      expect(Number(match[1])).toBeGreaterThan(32);
-    });
+    const legend = screen.getByTestId('export-legend');
+    expect(legend).toHaveClass('export-legend--fit-content');
+    expect(legend.closest('.export-composition__body')).toHaveClass('export-composition__body--legend-right-fit');
+    expect(screen.queryByTestId('export-legend-resize-handle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-legend-width-input')).not.toBeInTheDocument();
   });
 
   it('IT-030: locationCount 2 shows two insets; 0 hides them', () => {
@@ -120,6 +109,13 @@ describe('export composition integration', () => {
 
     expect(screen.getByTestId('export-location-inset-0')).toBeInTheDocument();
     expect(screen.getByTestId('export-location-inset-1')).toBeInTheDocument();
+
+    const overviewNorth = within(screen.getByTestId('export-location-inset-0')).getByTestId('export-north-control');
+    const overviewScale = within(screen.getByTestId('export-location-inset-0')).getByTestId('export-scale-control');
+    expect(overviewNorth.className).toContain('export-map-control--anchor-left');
+    expect(overviewScale.className).toContain('export-map-control--anchor-left');
+    expect(overviewNorth.className).not.toContain('export-map-control--anchor-right');
+    expect(overviewScale.className).not.toContain('export-map-control--anchor-right');
 
     rerender(
       <CompositionPreview
@@ -329,7 +325,7 @@ describe('export composition integration', () => {
     expect(screen.getByTestId('export-location-insets')).toHaveAttribute('data-placement', 'side');
   });
 
-  it('IT-044: inside legend stays anchored to the main map when location inset is visible', () => {
+  it('IT-044: right legend sits beside the map, not inside the map cell', () => {
     const snapshot = createEditorExportSnapshot({
       mapName: 'Layout seguro',
       elements: [sampleElement('e1', 'Ponto')],
@@ -339,7 +335,7 @@ describe('export composition integration', () => {
         session={{
           ...createDefaultExportSession(snapshot),
           title: 'Layout seguro',
-          legendPosition: 'inside',
+          legendPosition: 'right',
           locationCount: 1,
           locations: [{ uf: 'RS', stateName: 'Rio Grande do Sul', municipioCode: null, municipioName: null }],
         }}
@@ -347,9 +343,59 @@ describe('export composition integration', () => {
     );
 
     const legend = screen.getByTestId('export-legend');
-    const mainMapCell = legend.closest('.export-composition__main-map-cell');
-    expect(mainMapCell).not.toBeNull();
-    expect(mainMapCell).toContainElement(screen.getByTestId('export-main-map'));
-    expect(mainMapCell).not.toContainElement(screen.getByTestId('export-location-insets'));
+    expect(legend).toHaveAttribute('data-legend-position', 'right');
+    expect(legend.closest('.export-composition__main-map-cell')).toBeNull();
+    expect(screen.getByTestId('export-location-insets')).toHaveAttribute('data-placement', 'bottom');
+  });
+
+  it('IT-045: one-column right legend fits content without wrapping labels', () => {
+    const snapshot = createEditorExportSnapshot({
+      mapName: 'Legenda justa',
+      elements: [
+        sampleElement('e1', 'Casa grande na praia'),
+        sampleElement('e2', 'Elemento linear longo'),
+      ],
+    });
+    render(
+      <CompositionPreview
+        session={{
+          ...createDefaultExportSession(snapshot),
+          title: 'Legenda justa',
+          legendPosition: 'right',
+          legendColumns: 1,
+        }}
+      />,
+    );
+
+    const legend = screen.getByTestId('export-legend');
+    expect(legend).toHaveClass('export-legend--fit-content');
+    expect(legend.closest('.export-composition__body')).toHaveClass('export-composition__body--legend-right-fit');
+    expect(screen.queryByTestId('export-legend-resize-handle')).not.toBeInTheDocument();
+    screen.getAllByTestId('export-legend-item').forEach((item) => {
+      expect(item.querySelector('.export-legend__label')).toHaveTextContent(/./);
+    });
+  });
+
+  it('IT-046: multi-column right legend also fits content without wrapping labels', () => {
+    const snapshot = createEditorExportSnapshot({
+      mapName: 'Legenda larga',
+      elements: [sampleElement('e1', 'A'), sampleElement('e2', 'B')],
+    });
+    render(
+      <CompositionPreview
+        session={{
+          ...createDefaultExportSession(snapshot),
+          title: 'Legenda larga',
+          legendPosition: 'right',
+          legendColumns: 2,
+        }}
+        showMetricControls
+        onLegendRightWidthChange={() => {}}
+      />,
+    );
+
+    const legend = screen.getByTestId('export-legend');
+    expect(legend).toHaveClass('export-legend--fit-content');
+    expect(screen.queryByTestId('export-legend-resize-handle')).not.toBeInTheDocument();
   });
 });
