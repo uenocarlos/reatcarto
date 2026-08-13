@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Menu, FileText, Download } from 'lucide-react';
+import { Menu, FileText, Download, FileJson } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -15,8 +15,11 @@ import {
 export default function MobileEditorActionsMenu({
   onExport,
   onMemorial,
+  onGisExport,
   exportDisabled = false,
   exportDisabledReason,
+  gisExportDisabled = false,
+  gisExportDisabledReason,
 }) {
   const [open, setOpen] = useState(false);
 
@@ -28,6 +31,11 @@ export default function MobileEditorActionsMenu({
   const handleMemorial = () => {
     setOpen(false);
     onMemorial?.();
+  };
+
+  const handleGisExport = () => {
+    setOpen(false);
+    onGisExport?.();
   };
 
   return (
@@ -60,6 +68,19 @@ export default function MobileEditorActionsMenu({
           >
             <FileText className="w-4 h-4" />
             Memorial
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-start gap-3 h-11"
+            onClick={handleGisExport}
+            disabled={gisExportDisabled}
+            title={gisExportDisabledReason || 'Exportar GeoJSON ou Shapefile'}
+            data-testid="gis-export-entry"
+            aria-label="Exportar GeoJSON ou Shapefile"
+          >
+            <FileJson className="w-4 h-4" />
+            GeoJSON / SHP
           </Button>
           <Button
             type="button"

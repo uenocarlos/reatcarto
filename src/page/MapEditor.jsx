@@ -37,6 +37,7 @@ import {
   updatePayloadFromSnapshot,
 } from '@/lib/elementHistory';
 import ExportEntry from '@/components/map/ExportEntry';
+import GisExportEntry from '@/components/map/gis/GisExportEntry';
 import MobileEditorActionsMenu from '@/components/map/MobileEditorActionsMenu';
 import MobileGeometryEditBar from '@/components/map/MobileGeometryEditBar';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -53,6 +54,7 @@ import { getOfflineUserId, storeForUser } from '@/lib/offline/offlineApi';
 
 const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
 const MemorialDialog = lazy(() => import('@/components/map/MemorialDialog'));
+const GisExportDialog = lazy(() => import('@/components/map/gis/GisExportDialog'));
 
 export default function MapEditor() {
   const { mapId } = useParams();
@@ -79,6 +81,7 @@ export default function MapEditor() {
   const [exportSessionKey, setExportSessionKey] = useState(0);
   const [exportSnapshot, setExportSnapshot] = useState(null);
   const [memorialOpen, setMemorialOpen] = useState(false);
+  const [gisExportOpen, setGisExportOpen] = useState(false);
   const [geometryEditMode, setGeometryEditMode] = useState(false);
   const geometryBaselineRef = useRef(null);
   const isMobile = useIsMobile();
@@ -1032,8 +1035,11 @@ export default function MapEditor() {
     <MobileEditorActionsMenu
       onExport={handleOpenExport}
       onMemorial={() => setMemorialOpen(true)}
+      onGisExport={() => setGisExportOpen(true)}
       exportDisabled={!isAuthenticated || mapAuthError}
       exportDisabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+      gisExportDisabled={!isAuthenticated || mapAuthError}
+      gisExportDisabledReason={!isAuthenticated ? 'Faça login para exportar dados GIS' : undefined}
     />
   ) : null;
 
@@ -1050,6 +1056,11 @@ export default function MapEditor() {
         <FileText className="w-4 h-4" />
         Memorial
       </Button>
+      <GisExportEntry
+        onOpen={() => setGisExportOpen(true)}
+        disabled={!isAuthenticated || mapAuthError}
+        disabledReason={!isAuthenticated ? 'Faça login para exportar dados GIS' : undefined}
+      />
       <ExportEntry
         onOpen={handleOpenExport}
         disabled={!isAuthenticated || mapAuthError}
@@ -1213,6 +1224,20 @@ export default function MapEditor() {
             onOpenChange={setMemorialOpen}
             elements={elements}
             mapName={mapData?.name ?? ''}
+          />
+        </Suspense>
+      ) : null}
+
+      {gisExportOpen ? (
+        <Suspense fallback={null}>
+          <GisExportDialog
+            open={gisExportOpen}
+            onOpenChange={setGisExportOpen}
+            mapId={mapId}
+            mapName={mapData?.name ?? ''}
+            elements={elements}
+            hiddenIds={hiddenIds}
+            pendingCount={pendingCount}
           />
         </Suspense>
       ) : null}

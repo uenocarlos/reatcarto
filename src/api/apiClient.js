@@ -62,7 +62,7 @@ function normalizeMap(map) {
   };
 }
 
-function normalizeElement(element) {
+export function normalizeElement(element) {
   if (!element) return element;
   const style =
     typeof element.style === 'string' ? element.style : JSON.stringify(element.style ?? {});

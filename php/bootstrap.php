@@ -18,6 +18,8 @@ require_once __DIR__ . '/lib/GeoJson.php';
 require_once __DIR__ . '/lib/Maps/MapService.php';
 require_once __DIR__ . '/lib/Elements/ElementService.php';
 require_once __DIR__ . '/lib/Elements/ElementCategoryService.php';
+require_once __DIR__ . '/lib/Gis/ShapefileWriter.php';
+require_once __DIR__ . '/lib/Gis/ShapefileExportService.php';
 require_once __DIR__ . '/lib/Photos/PhotoService.php';
 require_once __DIR__ . '/lib/Videos/VideoService.php';
 require_once __DIR__ . '/lib/Icons/IconService.php';

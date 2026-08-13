@@ -21,6 +21,8 @@ require_once $projectRoot . '/php/lib/GeoJson.php';
 require_once $projectRoot . '/php/lib/Maps/MapService.php';
 require_once $projectRoot . '/php/lib/Elements/ElementService.php';
 require_once $projectRoot . '/php/lib/Elements/ElementCategoryService.php';
+require_once $projectRoot . '/php/lib/Gis/ShapefileWriter.php';
+require_once $projectRoot . '/php/lib/Gis/ShapefileExportService.php';
 require_once $projectRoot . '/php/lib/Photos/PhotoService.php';
 require_once $projectRoot . '/php/lib/Videos/VideoService.php';
 require_once $projectRoot . '/php/lib/Icons/IconService.php';
