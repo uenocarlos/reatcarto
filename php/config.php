@@ -110,7 +110,8 @@ function build_app_config(): array
             'username' => env_string('ADMIN_USERNAME'),
             'password' => env_string('ADMIN_PASSWORD'),
         ],
-        // Defina REQUIRE_EMAIL_VERIFICATION=true no .env para reativar a confirmação por email.
+        // Standby: false libera cadastro e uso imediato, sem enviar email.
+        // true reativa a confirmação; contas sem email_verified_at precisam validar.
         'require_email_verification' => env_bool('REQUIRE_EMAIL_VERIFICATION', false),
     ];
 }

@@ -37,7 +37,7 @@ export default function PasswordReset() {
   };
 
   return (
-    <AuthShell title="Nova senha">
+    <AuthShell title="Nova senha" showLogo={false}>
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
             <div>
               <label htmlFor="password" className="text-sm font-medium">

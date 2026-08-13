@@ -55,10 +55,7 @@ export default function Login({ onLoginSuccess }) {
   };
 
   return (
-    <AuthShell
-      title="ReatCarto"
-      description="Entre com email ou usuário para gerenciar seus mapas"
-    >
+    <AuthShell description="Entre com email ou usuário para gerenciar seus mapas">
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div className="space-y-2">
               <label htmlFor="identifier" className="text-sm font-medium flex items-center gap-2">

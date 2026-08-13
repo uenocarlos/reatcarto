@@ -129,7 +129,8 @@ function auth_register(array $input): array
             'phone' => trim((string) $input['phone']),
             'role' => 'field',
             'status' => $requireVerification ? 'pending_verification' : 'active',
-            'email_verified_at' => $requireVerification ? null : date('Y-m-d H:i:s'),
+            // Keep unverified during standby so turning the flag on later requires confirmation.
+            'email_verified_at' => null,
             'terms_version' => $config['terms_version'],
             'privacy_version' => $config['privacy_version'],
         ]);
@@ -273,7 +274,12 @@ function auth_resend_verification(string $email): array
     enforce_rate_limit(rate_limit_bucket('resend_verification', $ip, $email));
 
     $user = fetch_user_by_identifier($email);
-    if ($user !== null && $user['status'] === 'pending_verification') {
+    if (
+        email_verification_required()
+        && $user !== null
+        && $user['status'] !== 'deactivated'
+        && ($user['email_verified_at'] ?? null) === null
+    ) {
         $token = create_verification_token(db(), (string) $user['id']);
         Mailer::sendVerificationEmail((string) $user['email'], $token);
     }
@@ -311,7 +317,7 @@ function auth_login(string $identifier, string $password): array
         auth_fail('unauthenticated', 'Invalid credentials.', 401);
     }
 
-    if (email_verification_required() && $user['status'] === 'pending_verification') {
+    if (user_needs_email_verification($user)) {
         auth_fail(
             'account_pending',
             'Email verification is required. Check your inbox or request a new verification email.',
@@ -360,7 +366,7 @@ function auth_password_forgot(string $email): array
     }
 
     $user = fetch_user_by_identifier($email);
-    if ($user !== null && $user['status'] === 'active' && $user['email_verified_at'] !== null) {
+    if ($user !== null && $user['status'] === 'active') {
         $token = create_password_reset_token(db(), (string) $user['id']);
         Mailer::sendPasswordResetEmail((string) $user['email'], $token);
     }

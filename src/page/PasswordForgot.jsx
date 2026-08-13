@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api, ApiError } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,7 +29,7 @@ export default function PasswordForgot() {
   };
 
   return (
-    <AuthShell title="Recuperar senha">
+    <AuthShell title="Recuperar senha" backTo="/login" showLogo={false}>
           {submitted ? (
             <p role="status">
               Se existir conta para esse email, enviamos instruções. Verifique sua caixa de entrada.
@@ -52,11 +51,6 @@ export default function PasswordForgot() {
               </Button>
             </form>
           )}
-          <p className="mt-4 text-center text-sm">
-            <Link to="/login" className="text-primary underline">
-              Voltar ao login
-            </Link>
-          </p>
     </AuthShell>
   );
 }

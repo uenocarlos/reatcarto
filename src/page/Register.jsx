@@ -67,7 +67,7 @@ export default function Register() {
   ];
 
   return (
-    <AuthShell title="Criar conta profissional" wide>
+    <AuthShell title="Criar conta profissional" wide backTo="/login" showLogo={false}>
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
             {fields.map(([key, label, type]) => (
               <div key={key} className="space-y-1">
