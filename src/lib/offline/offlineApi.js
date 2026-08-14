@@ -131,24 +131,26 @@ export async function offlineUpdateElement(id, payload, clientMutationId = newMu
     const prepared = await store.getPreparedMaps();
     for (const p of prepared) {
       const els = await store.getElements(p.mapId);
-      if (els.some((e) => e.id === id)) {
+      if (els.some((e) => String(e.id) === String(id))) {
         mapId = p.mapId;
         break;
       }
     }
   }
   const elements = mapId ? await store.getElements(mapId) : [];
-  const current = elements.find((e) => e.id === id);
-  if (!current) {
-    throw new Error('Element not found in offline cache.');
-  }
+  const current = elements.find((e) => String(e.id) === String(id));
   const updated = {
-    ...current,
+    ...(current ?? { id, map_id: mapId, element_type: payload.element_type ?? 'point' }),
     ...payload,
-    version: current.version,
+    id,
+    map_id: mapId ?? current?.map_id ?? payload.map_id,
+    version: current?.version ?? payload.base_version ?? 0,
     _pending: true,
   };
-  await store.upsertElement(mapId, updated);
+  if (!updated.map_id) {
+    throw new Error('Element not found in offline cache.');
+  }
+  await store.upsertElement(updated.map_id, updated);
   await store.collapseOutboxForResource('element', id);
   await store.enqueue({
     client_mutation_id: clientMutationId,

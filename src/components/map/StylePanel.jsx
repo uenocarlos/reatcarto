@@ -1049,7 +1049,7 @@ export default function StylePanel({
                 onValueChange={(value) => setDetails({ ...details, element_category: value })}
               >
                 <SelectTrigger><SelectValue placeholder="Selecione o tipo" /></SelectTrigger>
-                <SelectContent className="z-[1100]">
+                <SelectContent className="z-[1200]">
                   {elementCategories.map((category) => (
                     <SelectItem key={category.id} value={category.id}>
                       {category.label}
@@ -1308,13 +1308,13 @@ export default function StylePanel({
 
   return (
     <>
-      {/* Desktop: side panel */}
-      <div className="hidden sm:flex absolute right-0 top-0 bottom-0 w-96 bg-card border-l shadow-2xl z-[1001] flex-col">
+      {/* Desktop: side panel — above EditorTopDock (z-1002) */}
+      <div className="hidden sm:flex absolute right-0 top-0 bottom-0 w-96 bg-card border-l shadow-2xl z-[1100] flex-col">
         {panelContent}
       </div>
 
-      {/* Mobile: full screen */}
-      <div className="sm:hidden fixed inset-0 z-[1001] bg-card flex flex-col">
+      {/* Mobile: full screen — above EditorTopDock (z-1002) */}
+      <div className="sm:hidden fixed inset-0 z-[1100] bg-card flex flex-col">
         {panelContent}
       </div>
 

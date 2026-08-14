@@ -2,10 +2,17 @@ import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useMem
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
-import { Button } from '@/components/ui/button';
-import { ArrowLeft, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { Geolocation } from '@capacitor/geolocation';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import LeafletMap from '@/components/map/LeafletMap';
 import MapToolbar from '@/components/map/MapToolbar';
@@ -22,9 +29,8 @@ import {
   mergeElementCategories,
   saveLocalElementCategories,
 } from '@/lib/elementCategoryStore';
-import { Badge } from '@/components/ui/badge';
 import ConflictResolutionModal from '@/components/map/ConflictResolutionModal';
-import { isOnline } from '@/lib/offline/connectivity';
+import { isOnline, onConnectivityChange } from '@/lib/offline/connectivity';
 import { getOutboxSummary } from '@/lib/offline/offlineApi';
 import {
   createEmptyHistory,
@@ -36,10 +42,9 @@ import {
   createPayloadFromSnapshot,
   updatePayloadFromSnapshot,
 } from '@/lib/elementHistory';
-import ExportEntry from '@/components/map/ExportEntry';
-import GisExportEntry from '@/components/map/gis/GisExportEntry';
-import MobileEditorActionsMenu from '@/components/map/MobileEditorActionsMenu';
+import EditorTopDock from '@/components/map/EditorTopDock';
 import MobileGeometryEditBar from '@/components/map/MobileGeometryEditBar';
+import GisExportDialog from '@/components/map/gis/GisExportDialog';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { lockScreenOrientation, unlockScreenOrientation } from '@/lib/deviceViewport';
 import { createEditorExportSnapshot } from '@/lib/export/session';
@@ -54,7 +59,6 @@ import { getOfflineUserId, storeForUser } from '@/lib/offline/offlineApi';
 
 const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
 const MemorialDialog = lazy(() => import('@/components/map/MemorialDialog'));
-const GisExportDialog = lazy(() => import('@/components/map/gis/GisExportDialog'));
 
 export default function MapEditor() {
   const { mapId } = useParams();
@@ -83,6 +87,9 @@ export default function MapEditor() {
   const [memorialOpen, setMemorialOpen] = useState(false);
   const [gisExportOpen, setGisExportOpen] = useState(false);
   const [geometryEditMode, setGeometryEditMode] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishConfirmEmpty, setPublishConfirmEmpty] = useState(false);
+  const [online, setOnline] = useState(() => isOnline());
   const geometryBaselineRef = useRef(null);
   const isMobile = useIsMobile();
   const historySilentRef = useRef(false);
@@ -100,7 +107,8 @@ export default function MapEditor() {
   const viewSaveInFlightRef = useRef(false);
   const suppressViewPersistenceRef = useRef(0);
   const userInteractedRef = useRef(false);
-  const { getSyncEngine, isAuthenticated, user, refreshUser } = useAuth();
+  const suppressedCreateIdsRef = useRef(new Set());
+  const { getSyncEngine, flushOutbox, isAuthenticated, user, refreshUser } = useAuth();
 
   useEffect(() => {
     historyRef.current = history;
@@ -135,6 +143,8 @@ export default function MapEditor() {
     refreshPending();
   }, [refreshPending]);
 
+  useEffect(() => onConnectivityChange(setOnline), []);
+
   const { data: mapData, isError: mapAuthError } = useQuery({
     queryKey: ['map', mapId],
     queryFn: () => api.entities.Map.filter({ id: mapId }),
@@ -145,6 +155,39 @@ export default function MapEditor() {
   const { data: elements = [] } = useQuery({
     queryKey: ['elements', mapId],
     queryFn: () => api.entities.MapElement.filter({ map_id: mapId }),
+  });
+
+  const invalidateMapQueries = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['map', mapId] });
+    queryClient.invalidateQueries({ queryKey: ['maps'] });
+  }, [queryClient, mapId]);
+
+  const publishMutation = useMutation({
+    mutationFn: ({ id, confirmEmpty, baseVersion }) =>
+      api.entities.Map.publish(id, { confirmEmpty, baseVersion }),
+    onSuccess: () => {
+      invalidateMapQueries();
+      setPublishOpen(false);
+      setPublishConfirmEmpty(false);
+      toast.success('Mapa publicado na galeria');
+    },
+    onError: (err) => {
+      if (err.code === 'confirmation_required') {
+        setPublishConfirmEmpty(true);
+        setPublishOpen(true);
+        return;
+      }
+      toast.error(err.message || 'Falha ao publicar mapa');
+    },
+  });
+
+  const unpublishMutation = useMutation({
+    mutationFn: ({ id, version }) => api.entities.Map.unpublish(id, version),
+    onSuccess: () => {
+      invalidateMapQueries();
+      toast.success('Mapa removido da galeria pública');
+    },
+    onError: (err) => toast.error(err.message || 'Falha ao despublicar mapa'),
   });
 
   useEffect(() => {
@@ -186,11 +229,11 @@ export default function MapEditor() {
   }, []);
 
   useEffect(() => {
-    if (mapAuthError) {
+    if (mapAuthError && !mapData) {
       toast.error('Mapa não encontrado, acesso negado ou indisponível offline');
       navigate('/');
     }
-  }, [mapAuthError, navigate]);
+  }, [mapAuthError, mapData, navigate]);
 
   useEffect(() => {
     refreshPending();
@@ -216,8 +259,65 @@ export default function MapEditor() {
 
   const createMutation = useMutation({
     mutationFn: (data) => api.entities.MapElement.create(data),
-    onSuccess: (newEl) => {
-      queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
+    onMutate: async (data) => {
+      const optimisticId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const geojson =
+        typeof data.geojson === 'string' ? data.geojson : JSON.stringify(data.geojson ?? {});
+      const style =
+        typeof data.style === 'string' ? data.style : JSON.stringify(data.style ?? {});
+      const optimistic = {
+        ...data,
+        id: optimisticId,
+        geojson,
+        style,
+        version: 0,
+        photos: [],
+        photo_urls: [],
+        _isNew: true,
+        _pending: true,
+      };
+      await queryClient.cancelQueries({ queryKey: ['elements', mapId] });
+      const previous = queryClient.getQueryData(['elements', mapId]);
+      queryClient.setQueryData(['elements', mapId], (old = []) => [...old, optimistic]);
+      if (!historySilentRef.current && !skipOpenEditorRef.current) {
+        editingBaselineRef.current = snapshotElement(optimistic);
+        setEditingElement(optimistic);
+      }
+      return { previous, optimisticId };
+    },
+    onSuccess: (newEl, _vars, ctx) => {
+      if (
+        suppressedCreateIdsRef.current.has(String(ctx?.optimisticId)) ||
+        suppressedCreateIdsRef.current.has(String(newEl.id))
+      ) {
+        suppressedCreateIdsRef.current.add(String(newEl.id));
+        queryClient.setQueryData(['elements', mapId], (old = []) =>
+          (old ?? []).filter(
+            (el) =>
+              String(el.id) !== String(ctx?.optimisticId) && String(el.id) !== String(newEl.id)
+          )
+        );
+        void api.entities.MapElement.delete(newEl.id, newEl.version);
+        return;
+      }
+      queryClient.setQueryData(['elements', mapId], (old = []) => {
+        const optimistic = (old ?? []).find((el) => String(el.id) === String(ctx?.optimisticId));
+        const replaced = (old ?? []).filter((el) => String(el.id) !== String(ctx?.optimisticId));
+        const nextEl = {
+          ...newEl,
+          _isNew: true,
+          _pending: newEl._pending || newEl._queued,
+          geojson: optimistic?.geojson ?? newEl.geojson,
+          style: optimistic?.style ?? newEl.style,
+          name: optimistic?.name ?? newEl.name,
+          description: optimistic?.description ?? newEl.description,
+          element_category: optimistic?.element_category ?? newEl.element_category,
+        };
+        if (replaced.some((el) => String(el.id) === String(newEl.id))) {
+          return replaced.map((el) => (String(el.id) === String(newEl.id) ? { ...el, ...nextEl } : el));
+        }
+        return [...replaced, nextEl];
+      });
       if (!historySilentRef.current) {
         commitHistory({ type: 'create', element: snapshotElement(newEl) });
       }
@@ -225,28 +325,54 @@ export default function MapEditor() {
         skipOpenEditorRef.current = false;
         editingBaselineRef.current = null;
       } else if (!historySilentRef.current) {
-        const snap = snapshotElement(newEl);
-        editingBaselineRef.current = snap;
-        setEditingElement({ ...newEl, _isNew: true });
+        setEditingElement((prev) => {
+          if (!prev) return prev;
+          if (
+            String(prev.id) !== String(ctx?.optimisticId) &&
+            String(prev.id) !== String(newEl.id)
+          ) {
+            return prev;
+          }
+          return {
+            ...newEl,
+            _isNew: true,
+            geojson: prev.geojson ?? newEl.geojson,
+            style: prev.style ?? newEl.style,
+            name: prev.name ?? newEl.name,
+            description: prev.description ?? newEl.description,
+          };
+        });
       }
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
       skipOpenEditorRef.current = false;
+      if (ctx?.previous !== undefined) {
+        queryClient.setQueryData(['elements', mapId], ctx.previous);
+      }
+      setEditingElement((prev) =>
+        prev && String(prev.id) === String(ctx?.optimisticId) ? null : prev
+      );
       toast.error(err.message || 'Falha ao criar elemento');
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => {
-      const { base_version, ...rest } = data;
+      const { base_version, _silentToast, _closeEditor, ...rest } = data;
       const current = elementsRef.current.find((e) => String(e.id) === String(id));
       return api.entities.MapElement.update(id, {
         ...rest,
         base_version: base_version ?? current?.version ?? editingElement?.version,
       });
     },
-    onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
+    onSuccess: (result, variables) => {
+      if (result) {
+        queryClient.setQueryData(['elements', mapId], (old = []) =>
+          (old ?? []).map((el) =>
+            String(el.id) === String(variables.id) ? { ...el, ...result, _isNew: el._isNew } : el
+          )
+        );
+      }
       if (!historySilentRef.current && pendingHistoryRef.current?.type === 'update') {
         commitHistory(pendingHistoryRef.current);
       }
@@ -270,8 +396,21 @@ export default function MapEditor() {
       const el = elementsRef.current.find((e) => String(e.id) === String(id));
       return api.entities.MapElement.delete(id, version ?? el?.version);
     },
+    onMutate: async (variables) => {
+      const id = variables.id;
+      suppressedCreateIdsRef.current.add(String(id));
+      const previous = queryClient.getQueryData(['elements', mapId]);
+      const withoutDeleted = (old = []) =>
+        (old ?? []).filter((el) => String(el.id) !== String(id));
+      queryClient.setQueryData(['elements', mapId], withoutDeleted);
+      setEditingElement((prev) => (prev && String(prev.id) === String(id) ? null : prev));
+      geometryBaselineRef.current = null;
+      setGeometryEditMode(false);
+      await queryClient.cancelQueries({ queryKey: ['elements', mapId] });
+      queryClient.setQueryData(['elements', mapId], withoutDeleted);
+      return { previous };
+    },
     onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
       if (!historySilentRef.current && pendingHistoryRef.current?.type === 'delete') {
         commitHistory(pendingHistoryRef.current);
       } else if (!historySilentRef.current && variables?.elementSnapshot) {
@@ -281,12 +420,13 @@ export default function MapEditor() {
       if (!historySilentRef.current && !variables?._silentToast) {
         toast.success('Elemento excluído!');
       }
-      setEditingElement((prev) =>
-        prev && String(prev.id) === String(variables?.id) ? null : prev
-      );
     },
-    onError: (err) => {
+    onError: (err, variables, ctx) => {
       pendingHistoryRef.current = null;
+      suppressedCreateIdsRef.current.delete(String(variables?.id));
+      if (ctx?.previous !== undefined) {
+        queryClient.setQueryData(['elements', mapId], ctx.previous);
+      }
       toast.error(err.message || 'Falha ao excluir elemento');
     },
   });
@@ -715,21 +855,46 @@ export default function MapEditor() {
         after,
       };
     }
-    updateMutation.mutate({
-      id: editingElement.id,
-      data: {
-        ...data,
-        geojson: editingElement.geojson,
-      },
-    });
-  };
 
-  const handleStyleClose = () => {
-    // Descarta geometria / estilo pré-visualizado sem salvar
+    const styleValue =
+      typeof data.style === 'string'
+        ? data.style
+        : data.style != null
+          ? JSON.stringify(data.style)
+          : editingElement.style;
+    queryClient.setQueryData(['elements', mapId], (old = []) =>
+      (old ?? []).map((el) =>
+        String(el.id) === String(editingElement.id)
+          ? { ...el, ...data, geojson: editingElement.geojson, style: styleValue }
+          : el
+      )
+    );
     editingBaselineRef.current = null;
     geometryBaselineRef.current = null;
     setGeometryEditMode(false);
-    queryClient.invalidateQueries({ queryKey: ['elements', mapId] });
+    setEditingElement(null);
+
+    if (!snapshotsContentEqual(before, after)) {
+      const offline = !isOnline();
+      if (offline) {
+        toast.success('Salvo neste dispositivo. Sincroniza quando houver internet.');
+      }
+      updateMutation.mutate({
+        id: editingElement.id,
+        _silentToast: offline,
+        data: {
+          ...data,
+          geojson: editingElement.geojson,
+          map_id: editingElement.map_id ?? mapId,
+        },
+      });
+    }
+  };
+
+  const handleStyleClose = () => {
+    editingBaselineRef.current = null;
+    geometryBaselineRef.current = null;
+    setGeometryEditMode(false);
     setEditingElement(null);
   };
 
@@ -993,6 +1158,10 @@ export default function MapEditor() {
       toast.error('Sessão expirada. Faça login novamente para exportar.');
       return;
     }
+    if (!isOnline()) {
+      toast.error('Exportar mapa exige conexão.');
+      return;
+    }
     if (!mapData) return;
     setExportSnapshot(buildExportSnapshot());
     setExportSessionKey((key) => key + 1);
@@ -1031,103 +1200,43 @@ export default function MapEditor() {
     />
   ) : null;
 
-  const mobileActionsMenu = mapData ? (
-    <MobileEditorActionsMenu
-      onExport={handleOpenExport}
-      onMemorial={() => setMemorialOpen(true)}
-      onGisExport={() => setGisExportOpen(true)}
-      exportDisabled={!isAuthenticated || mapAuthError}
-      exportDisabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
-      gisExportDisabled={!isAuthenticated || mapAuthError}
-      gisExportDisabledReason={!isAuthenticated ? 'Faça login para exportar dados GIS' : undefined}
-    />
-  ) : null;
+  const handleDockSync = useCallback(async () => {
+    try {
+      const result = await flushOutbox?.();
+      await refreshPending();
+      if (result?.offline) {
+        toast.info('Sem conexão — sincronização quando voltar online');
+        return;
+      }
+      if (result?.skipped) {
+        toast.info('Faça login para sincronizar');
+        return;
+      }
+      toast.success('Sincronização concluída');
+    } catch {
+      toast.error('Falha ao sincronizar');
+    }
+  }, [flushOutbox, refreshPending]);
 
-  const desktopActions = mapData ? (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="gap-2"
-        onClick={() => setMemorialOpen(true)}
-        title="Gerar memorial descritivo"
-      >
-        <FileText className="w-4 h-4" />
-        Memorial
-      </Button>
-      <GisExportEntry
-        onOpen={() => setGisExportOpen(true)}
-        disabled={!isAuthenticated || mapAuthError}
-        disabledReason={!isAuthenticated ? 'Faça login para exportar dados GIS' : undefined}
-      />
-      <ExportEntry
-        onOpen={handleOpenExport}
-        disabled={!isAuthenticated || mapAuthError}
-        disabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
-      />
-    </>
-  ) : null;
+  const editorOffline = !online;
+  const dockAuthBlocked = !isAuthenticated || mapAuthError;
+  const dockExportDisabled = dockAuthBlocked || editorOffline;
+  const dockExportDisabledReason = !isAuthenticated
+    ? 'Faça login para exportar'
+    : editorOffline
+      ? 'Indisponível offline'
+      : undefined;
+  const dockPublishDisabled = dockAuthBlocked || editorOffline;
+  const dockPublishDisabledReason = !isAuthenticated
+    ? 'Faça login para publicar'
+    : editorOffline
+      ? 'Indisponível offline'
+      : undefined;
+  const dockMemorialDisabled = editorOffline;
+  const dockMemorialDisabledReason = editorOffline ? 'Indisponível offline' : undefined;
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden overscroll-none">
-      {/* Header mobile */}
-      {!showMobileGeometryBar ? (
-        <div className="md:hidden bg-card border-b px-4 py-3 shadow-sm z-10 flex-shrink-0 space-y-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => navigate('/')}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <h1 className="font-bold text-sm leading-none flex items-center gap-2 truncate">
-              {mapData?.name || 'Carregando...'}
-              {pendingCount > 0 && <Badge variant="secondary">{pendingCount}</Badge>}
-              {!isOnline() && <Badge variant="outline">Offline</Badge>}
-            </h1>
-            <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider font-semibold truncate">
-              Gerador de Mapas
-            </p>
-          </div>
-          {mobileActionsMenu}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">{citySearchControl}</div>
-          {locateControl}
-        </div>
-        </div>
-      ) : null}
-
-      {/* Header desktop */}
-      <div className="hidden md:grid grid-cols-[1fr_minmax(14rem,32rem)_1fr] items-center gap-3 bg-card border-b px-4 py-3 shadow-sm z-10 flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => navigate('/')}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <img
-            src="/logo.png"
-            alt="Logo"
-            className="w-8 h-8 object-contain shrink-0"
-          />
-          <div className="min-w-0">
-            <h1 className="font-bold text-base leading-none flex items-center gap-2 truncate">
-              {mapData?.name || 'Carregando...'}
-              {pendingCount > 0 && <Badge variant="secondary">{pendingCount} pendente(s)</Badge>}
-              {!isOnline() && <Badge variant="outline">Offline</Badge>}
-            </h1>
-            <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider font-semibold">Gerador de Mapas</p>
-          </div>
-        </div>
-
-        <div className="flex justify-center items-center gap-2 min-w-0">
-          <div className="flex-1 min-w-0 max-w-md">{citySearchControl}</div>
-          {locateControl}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 min-w-0">
-          {desktopActions}
-        </div>
-      </div>
-
+    <div className="relative h-screen overflow-hidden overscroll-none bg-background">
       {/* Toolbar */}
       {!exportOpen && !showMobileGeometryBar ? (
         <MapToolbar
@@ -1140,7 +1249,7 @@ export default function MapEditor() {
 
       {/* Drawing mode indicator */}
       {drawingMode && activeTool !== 'select' && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-primary text-primary-foreground px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
+        <div className="absolute top-[5.75rem] left-1/2 z-[1000] -translate-x-1/2 rounded-full bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground shadow-lg">
           {drawingMode === 'manual' && 'Clique no mapa para inserir o ponto'}
           {drawingMode === 'gps' && 'Obtendo localização...'}
           {drawingMode === 'freehand' && 'Desenhe com o dedo ou mouse'}
@@ -1149,20 +1258,57 @@ export default function MapEditor() {
         </div>
       )}
       {editingElement && !drawingMode && !isMobile ? (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-card border px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
+        <div className="absolute top-[5.75rem] left-1/2 z-[1000] -translate-x-1/2 rounded-full border bg-card px-4 py-1.5 text-xs font-medium shadow-lg">
           {editingElement.element_type === 'point'
             ? 'Arraste o ponto para reposicionar · Salve no painel'
             : 'Arraste os vértices ou os pontos intermediários · Salve no painel'}
         </div>
       ) : null}
       {pasteEnabled && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-primary text-primary-foreground px-4 py-1.5 rounded-full text-xs font-medium shadow-lg">
+        <div className="absolute top-[5.75rem] left-1/2 z-[1000] -translate-x-1/2 rounded-full bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground shadow-lg">
           Clique no mapa para colar o ponto copiado
         </div>
       )}
 
       {/* Map */}
-      <div className="flex-1 relative" style={{ minHeight: 0 }}>
+      <div className="absolute inset-0" style={{ minHeight: 0 }}>
+        {mapData && !exportOpen && !showMobileGeometryBar ? (
+          <EditorTopDock
+            className={showStylePanel ? 'hidden sm:flex' : undefined}
+            mapName={mapData.name}
+            pendingCount={pendingCount}
+            offline={editorOffline}
+            compact={!!drawingMode && activeTool !== 'select'}
+            onBack={() => navigate('/')}
+            citySearch={citySearchControl}
+            locateControl={locateControl}
+            onExport={handleOpenExport}
+            onMemorial={() => {
+              if (dockMemorialDisabled) return;
+              setMemorialOpen(true);
+            }}
+            onGisExport={() => setGisExportOpen(true)}
+            isPublished={!!mapData.is_published}
+            onPublish={() => {
+              if (dockPublishDisabled) return;
+              setPublishConfirmEmpty(false);
+              setPublishOpen(true);
+            }}
+            onUnpublish={() =>
+              unpublishMutation.mutate({ id: mapData.id, version: mapData.version })
+            }
+            publishDisabled={dockPublishDisabled}
+            publishDisabledReason={dockPublishDisabledReason}
+            unpublishDisabled={unpublishMutation.isPending || editorOffline}
+            onSync={handleDockSync}
+            exportDisabled={dockExportDisabled}
+            exportDisabledReason={dockExportDisabledReason}
+            gisExportDisabled={dockAuthBlocked}
+            gisExportDisabledReason={!isAuthenticated ? 'Faça login para exportar' : undefined}
+            memorialDisabled={dockMemorialDisabled}
+            memorialDisabledReason={dockMemorialDisabledReason}
+          />
+        ) : null}
         {mapData ? (
           <LeafletMap
             mapKey={mapId}
@@ -1195,6 +1341,7 @@ export default function MapEditor() {
             onViewChange={handleMapViewChange}
             showDecorativeBorder
             showLocateControl={false}
+            controlsTopClass="top-[7.5rem] md:top-[5.5rem]"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -1229,8 +1376,7 @@ export default function MapEditor() {
       ) : null}
 
       {gisExportOpen ? (
-        <Suspense fallback={null}>
-          <GisExportDialog
+        <GisExportDialog
             open={gisExportOpen}
             onOpenChange={setGisExportOpen}
             mapId={mapId}
@@ -1239,7 +1385,6 @@ export default function MapEditor() {
             hiddenIds={hiddenIds}
             pendingCount={pendingCount}
           />
-        </Suspense>
       ) : null}
 
       {/* GPS Tracker */}
@@ -1313,6 +1458,44 @@ export default function MapEditor() {
           }
         }}
       />
+
+      <Dialog
+        open={publishOpen}
+        onOpenChange={(open) => {
+          setPublishOpen(open);
+          if (!open) setPublishConfirmEmpty(false);
+        }}
+      >
+        <DialogContent overlayClassName="z-[1100]" className="z-[1100]">
+          <DialogHeader>
+            <DialogTitle>Publicar mapa na galeria?</DialogTitle>
+            <DialogDescription>
+              Ao publicar, o nome, descrição, elementos e fotos deste mapa ficarão visíveis para qualquer
+              visitante anônimo. Revise o conteúdo antes de continuar.
+            </DialogDescription>
+          </DialogHeader>
+          {publishConfirmEmpty && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3">
+              Este mapa não possui elementos. Confirme que deseja publicar um mapa vazio.
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPublishOpen(false)}>Cancelar</Button>
+            <Button
+              onClick={() =>
+                publishMutation.mutate({
+                  id: mapData?.id,
+                  confirmEmpty: publishConfirmEmpty,
+                  baseVersion: mapData?.version,
+                })
+              }
+              disabled={publishMutation.isPending || !mapData}
+            >
+              {publishMutation.isPending ? 'Publicando...' : 'Publicar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -129,8 +129,8 @@ describe('exportGeoJson', () => {
     expect(result.incompleteWarning).toBe(true);
   });
 
-  it('UT-030: createObjectURL quota error becomes storage_error', () => {
-    expect(() => exportGeoJsonToFile(
+  it('UT-030: createObjectURL quota error becomes storage_error', async () => {
+    await expect(exportGeoJsonToFile(
       { type: 'FeatureCollection', features: [] },
       'mapa.geojson',
       {
@@ -139,10 +139,10 @@ describe('exportGeoJson', () => {
         },
         documentRef: document,
       },
-    )).toThrow(GisExportError);
+    )).rejects.toBeInstanceOf(GisExportError);
 
     try {
-      exportGeoJsonToFile(
+      await exportGeoJsonToFile(
         { type: 'FeatureCollection', features: [] },
         'mapa.geojson',
         {
@@ -155,6 +155,25 @@ describe('exportGeoJson', () => {
     } catch (error) {
       expect(error.code).toBe('storage_error');
     }
+  });
+
+  it('keeps GeoJSON download out of the app window', async () => {
+    const createObjectURL = vi.fn(() => 'blob:reatcarto-test');
+    const revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function mockClick() {
+      expect(this.download).toBe('mapa.geojson');
+      expect(this.target).toBe('reatcarto-download-frame');
+    });
+    await exportGeoJsonToFile(
+      { type: 'FeatureCollection', features: [] },
+      'mapa.geojson',
+      { createObjectURL, revokeObjectURL, documentRef: document, isNative: () => false },
+    );
+    expect(click).toHaveBeenCalled();
+    const frame = document.getElementById('reatcarto-download-frame');
+    expect(frame).toBeTruthy();
+    expect(frame.getAttribute('name')).toBe('reatcarto-download-frame');
+    click.mockRestore();
   });
 });
 

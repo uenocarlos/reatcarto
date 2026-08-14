@@ -1,5 +1,5 @@
 import { apiFetch, API_BASE_URL, ApiError } from './http';
-import { api, normalizeElement } from './apiClient';
+import { api, mergeLocalPendingElements, normalizeElement } from './apiClient';
 import { isOnline } from '@/lib/offline/connectivity';
 import { GIS_ELEMENT_PAGE_SIZE } from '@/lib/gis/constants';
 import { triggerDownload } from '@/lib/gis/exportGeoJson';
@@ -21,9 +21,10 @@ function parseFilename(disposition, fallback) {
 /**
  * Loads every map element, following pagination (page_size=100).
  * Offline uses the IndexedDB copy already exposed by MapElement.filter.
+ * Online pages are merged with local outbox/pending geometries waiting to sync.
  *
  * @param {string} mapId
- * @param {{ fetchPage?: Function, offlineFilter?: Function, online?: () => boolean }} [deps]
+ * @param {{ fetchPage?: Function, offlineFilter?: Function, online?: () => boolean, mergePending?: Function }} [deps]
  */
 export async function fetchAllMapElements(mapId, deps = {}) {
   const online = deps.online ?? isOnline;
@@ -54,7 +55,8 @@ export async function fetchAllMapElements(mapId, deps = {}) {
     page += 1;
   } while (page <= totalPages);
 
-  return all;
+  const mergePending = deps.mergePending ?? mergeLocalPendingElements;
+  return mergePending(mapId, all);
 }
 
 /**
@@ -104,7 +106,7 @@ export async function exportShapefile(input, deps = {}) {
 
   if (deps.download !== false) {
     const download = deps.download ?? triggerDownload;
-    download(blob, fileName, { documentRef: deps.documentRef });
+    await download(blob, fileName, { documentRef: deps.documentRef });
   }
 
   return { blob, fileName, mimeType: 'application/zip' };

@@ -2,6 +2,7 @@ import { apiFetch, API_BASE_URL, ApiError } from './http';
 import { isOnline } from '@/lib/offline/connectivity';
 import {
   setOfflineUserId,
+  getOfflineUserId,
   prepareOfflineMap,
   offlineListMaps,
   offlineGetMap,
@@ -16,6 +17,82 @@ import { reduceConflicts } from '@/lib/sync/SyncEngine';
 
 function newMutationIdInternal() {
   return newMutationId();
+}
+
+const ELEMENT_REQUEST_TIMEOUT_MS = 10000;
+
+function abortSignalAfter(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+function isNetworkError(err) {
+  return err?.code === 'network_error' || err?.name === 'AbortError';
+}
+
+async function withNetworkFallback(onlineFn, offlineFn) {
+  if (!isOnline()) {
+    return offlineFn();
+  }
+  try {
+    return await onlineFn();
+  } catch (err) {
+    if (isNetworkError(err)) {
+      try {
+        return await offlineFn();
+      } catch {
+        throw err;
+      }
+    }
+    throw err;
+  }
+}
+
+function unavailableOfflineError() {
+  const err = new Error('Map not available offline.');
+  err.code = 'offline_unavailable';
+  return err;
+}
+
+async function readOfflineElements(mapId) {
+  const offline = await offlineGetMap(mapId);
+  if (offline.unavailable) {
+    throw unavailableOfflineError();
+  }
+  return (offline.elements ?? []).map(normalizeElement);
+}
+
+export async function mergeLocalPendingElements(mapId, serverElements) {
+  try {
+    if (!getOfflineUserId()) return serverElements;
+    const store = storeForUser();
+    const local = await store.getElements(mapId);
+    const outbox = typeof store.getAllOutbox === 'function' ? await store.getAllOutbox() : [];
+    const deletedIds = new Set(
+      (outbox ?? [])
+        .filter((row) => row.resource_type === 'element' && row.op === 'delete' && row.status === 'pending')
+        .map((row) => String(row.resource_id))
+    );
+    const byId = new Map((serverElements ?? []).map((el) => [String(el.id), el]));
+    for (const raw of local ?? []) {
+      const normalized = normalizeElement(raw);
+      const id = String(normalized.id);
+      if (deletedIds.has(id)) continue;
+      if (raw?._pending || !byId.has(id)) {
+        byId.set(id, { ...normalized, ...(raw?._pending ? { _pending: true } : {}) });
+      }
+    }
+    for (const id of deletedIds) {
+      byId.delete(id);
+    }
+    return [...byId.values()];
+  } catch {
+    return serverElements;
+  }
 }
 
 /**
@@ -165,37 +242,45 @@ export const api = {
   entities: {
     Map: {
       list: async (sort, options = {}) => {
-        if (!isOnline()) {
-          const maps = (await offlineListMaps()).map(normalizeMap);
+        const sortMaps = (maps) => {
           if (sort === '-created_date') {
             maps.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
           }
           return maps;
-        }
-        const params = new URLSearchParams();
-        if (options.q) params.set('q', options.q);
-        if (options.page) params.set('page', String(options.page));
-        if (options.pageSize) params.set('page_size', String(options.pageSize));
-        const qs = params.toString();
-        const data = await apiFetch(`/maps/list.php${qs ? `?${qs}` : ''}`, { method: 'GET' });
-        const maps = (data.maps ?? []).map(normalizeMap);
-        if (sort === '-created_date') {
-          maps.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        }
-        return maps;
+        };
+        return withNetworkFallback(
+          async () => {
+            const params = new URLSearchParams();
+            if (options.q) params.set('q', options.q);
+            if (options.page) params.set('page', String(options.page));
+            if (options.pageSize) params.set('page_size', String(options.pageSize));
+            const qs = params.toString();
+            const data = await apiFetch(`/maps/list.php${qs ? `?${qs}` : ''}`, {
+              method: 'GET',
+              signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+            });
+            return sortMaps((data.maps ?? []).map(normalizeMap));
+          },
+          async () => sortMaps((await offlineListMaps()).map(normalizeMap))
+        );
       },
       filter: async ({ id }) => {
-        if (!isOnline()) {
-          const offline = await offlineGetMap(id);
-          if (offline.unavailable) {
-            const err = new Error('Map not available offline.');
-            err.code = 'offline_unavailable';
-            throw err;
+        return withNetworkFallback(
+          async () => {
+            const data = await apiFetch(`/maps/get.php?id=${encodeURIComponent(id)}`, {
+              method: 'GET',
+              signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+            });
+            return [normalizeMap(data.map)];
+          },
+          async () => {
+            const offline = await offlineGetMap(id);
+            if (offline.unavailable) {
+              throw unavailableOfflineError();
+            }
+            return [normalizeMap(offline.map)];
           }
-          return [normalizeMap(offline.map)];
-        }
-        const data = await apiFetch(`/maps/get.php?id=${encodeURIComponent(id)}`, { method: 'GET' });
-        return [normalizeMap(data.map)];
+        );
       },
       create: async (payload, clientMutationId = newMutationIdInternal()) => {
         if (!isOnline()) {
@@ -268,79 +353,90 @@ export const api = {
         throw new Error('MapElement.list requires map_id; use filter({ map_id })');
       },
       filter: async ({ map_id, page, pageSize }) => {
-        if (!isOnline()) {
-          const offline = await offlineGetMap(map_id);
-          if (offline.unavailable) {
-            const err = new Error('Map not available offline.');
-            err.code = 'offline_unavailable';
-            throw err;
-          }
-          return offline.elements ?? [];
-        }
-        const params = new URLSearchParams({ map_id });
-        if (page) params.set('page', String(page));
-        if (pageSize) params.set('page_size', String(pageSize));
-        const data = await apiFetch(`/elements/list.php?${params}`, { method: 'GET' });
-        return (data.elements ?? []).map(normalizeElement);
+        return withNetworkFallback(
+          async () => {
+            const params = new URLSearchParams({ map_id });
+            if (page) params.set('page', String(page));
+            if (pageSize) params.set('page_size', String(pageSize));
+            const data = await apiFetch(`/elements/list.php?${params}`, {
+              method: 'GET',
+              signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+            });
+            const server = (data.elements ?? []).map(normalizeElement);
+            return mergeLocalPendingElements(map_id, server);
+          },
+          () => readOfflineElements(map_id)
+        );
       },
       create: async (payload, clientMutationId = newMutationIdInternal()) => {
-        if (!isOnline()) {
-          const created = await offlineCreateElement(payload, clientMutationId);
-          return normalizeElement(created);
-        }
+        const runOffline = async () =>
+          normalizeElement(await offlineCreateElement(payload, clientMutationId));
         const style =
           typeof payload.style === 'string' ? payload.style : JSON.stringify(payload.style ?? {});
         const geojson =
           typeof payload.geojson === 'string' ? payload.geojson : JSON.stringify(payload.geojson);
-        const data = await apiFetch('/elements/create.php', {
-          method: 'POST',
-          body: {
-            ...payload,
-            name: payload.name?.trim() ? payload.name : 'Element',
-            style,
-            geojson,
-            client_mutation_id: clientMutationId,
-          },
-        });
-        return normalizeElement(data.element);
+        return withNetworkFallback(async () => {
+          const data = await apiFetch('/elements/create.php', {
+            method: 'POST',
+            signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+            body: {
+              ...payload,
+              name: payload.name?.trim() ? payload.name : 'Element',
+              style,
+              geojson,
+              client_mutation_id: clientMutationId,
+            },
+          });
+          return normalizeElement(data.element);
+        }, runOffline);
       },
       update: async (id, payload, clientMutationId = newMutationIdInternal()) => {
-        if (!isOnline()) {
-          const updated = await offlineUpdateElement(id, payload, clientMutationId);
-          return normalizeElement(updated);
-        }
-        const baseVersion = payload.base_version ?? payload.version;
-        const body = { id, client_mutation_id: clientMutationId };
-        if (baseVersion != null) body.base_version = baseVersion;
-        for (const key of [
-          'name',
-          'description',
-          'element_category',
-          'geojson',
-          'style',
-          'element_type',
-          'is_publicly_visible',
-        ]) {
-          if (payload[key] !== undefined) {
-            if (key === 'style' && typeof payload[key] !== 'string') {
-              body[key] = JSON.stringify(payload[key]);
-            } else if (key === 'geojson' && typeof payload[key] !== 'string') {
-              body[key] = JSON.stringify(payload[key]);
-            } else {
-              body[key] = payload[key];
+        const runOffline = async () =>
+          normalizeElement(await offlineUpdateElement(id, payload, clientMutationId));
+        return withNetworkFallback(async () => {
+          const baseVersion = payload.base_version ?? payload.version;
+          const body = { id, client_mutation_id: clientMutationId };
+          if (baseVersion != null) body.base_version = baseVersion;
+          for (const key of [
+            'name',
+            'description',
+            'element_category',
+            'geojson',
+            'style',
+            'element_type',
+            'is_publicly_visible',
+          ]) {
+            if (payload[key] !== undefined) {
+              if (key === 'style' && typeof payload[key] !== 'string') {
+                body[key] = JSON.stringify(payload[key]);
+              } else if (key === 'geojson' && typeof payload[key] !== 'string') {
+                body[key] = JSON.stringify(payload[key]);
+              } else {
+                body[key] = payload[key];
+              }
             }
           }
-        }
-        const data = await apiFetch('/elements/update.php', { method: 'PATCH', body });
-        return normalizeElement(data.element);
+          const data = await apiFetch('/elements/update.php', {
+            method: 'PATCH',
+            signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+            body,
+          });
+          return normalizeElement(data.element);
+        }, runOffline);
       },
       delete: async (id, baseVersion, clientMutationId = newMutationIdInternal()) => {
-        if (!isOnline()) {
-          return offlineDeleteElement(id, baseVersion, clientMutationId);
-        }
-        const body = { id, client_mutation_id: clientMutationId };
-        if (baseVersion != null) body.base_version = baseVersion;
-        return apiFetch('/elements/delete.php', { method: 'DELETE', body });
+        return withNetworkFallback(
+          async () => {
+            const body = { id, client_mutation_id: clientMutationId };
+            if (baseVersion != null) body.base_version = baseVersion;
+            return apiFetch('/elements/delete.php', {
+              method: 'DELETE',
+              signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+              body,
+            });
+          },
+          () => offlineDeleteElement(id, baseVersion, clientMutationId)
+        );
       },
     },
   },

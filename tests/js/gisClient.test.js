@@ -72,6 +72,20 @@ describe('gisClient', () => {
     expect(apiFetch.mock.calls[0][0]).toContain('page_size=100');
   });
 
+  it('merges local pending geometries into the GeoJSON element list', async () => {
+    apiFetch.mockResolvedValueOnce({
+      elements: [elementRow(1)],
+      pagination: { page: 1, page_size: 100, total: 1, total_pages: 1 },
+    });
+    const pending = { ...elementRow(99), _pending: true };
+    const mergePending = vi.fn(async (_mapId, server) => [...server, pending]);
+
+    const all = await fetchAllMapElements('map-1', { mergePending });
+
+    expect(mergePending).toHaveBeenCalledWith('map-1', [expect.objectContaining({ id: 'e-1' })]);
+    expect(all.map((el) => el.id)).toEqual(['e-1', 'e-99']);
+  });
+
   it('UT-090 offline: uses IndexedDB filter without pagination API', async () => {
     isOnline.mockReturnValue(false);
     api.entities.MapElement.filter.mockResolvedValue([elementRow(1), elementRow(2)]);

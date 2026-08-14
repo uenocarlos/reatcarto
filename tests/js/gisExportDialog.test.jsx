@@ -96,6 +96,15 @@ describe('GisExportDialog', () => {
     expect(screen.getByLabelText(/Shapefile/)).toBeDisabled();
   });
 
+  it('offline GeoJSON uses local elements without fetching the server', async () => {
+    isOnline.mockReturnValue(false);
+    const fetchElements = vi.fn(async () => []);
+    renderDialog({ fetchElements });
+    await waitFor(() => expect(screen.getByTestId('gis-export-offline-note')).toBeInTheDocument());
+    expect(fetchElements).not.toHaveBeenCalled();
+    expect(screen.getByTestId('gis-export-confirm')).toBeEnabled();
+  });
+
   it('UT-123: picker with zero checked disables continue', async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByTestId('gis-export-confirm')).toBeEnabled());
@@ -129,5 +138,31 @@ describe('GisExportDialog', () => {
     const [, fileName] = exportGeoJson.mock.calls[0];
     expect(fileName).toMatch(/^mapa-costeiro-\d{4}-\d{2}-\d{2}\.geojson$/);
     expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('keeps pending local elements in the GeoJSON download after the server fetch', async () => {
+    const pending = {
+      id: 'pending-1',
+      name: 'Pendente',
+      element_type: 'point',
+      element_category: 'terra',
+      geojson: { type: 'Point', coordinates: [-51, -31] },
+      style: { icon_name: 'pin' },
+      _pending: true,
+    };
+    const exportGeoJson = vi.fn();
+    renderDialog({
+      elements: [...elements, pending],
+      fetchElements: vi.fn(async () => elements),
+      exportGeoJson,
+    });
+    await waitFor(() => expect(screen.getByTestId('gis-export-confirm')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('gis-export-confirm'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Baixar' })).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('gis-export-confirm'));
+    await waitFor(() => expect(exportGeoJson).toHaveBeenCalled());
+    const [collection] = exportGeoJson.mock.calls[0];
+    expect(collection.features).toHaveLength(4);
+    expect(collection.features.some((feature) => feature.properties.name === 'Pendente')).toBe(true);
   });
 });

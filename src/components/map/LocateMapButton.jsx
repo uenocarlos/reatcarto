@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 
 const VARIANT_CLASS = {
   map: 'h-12 w-12 shadow-lg bg-card border rounded-[12px]',
-  header: 'h-9 w-9 shrink-0 rounded-full border bg-background shadow-sm',
+  header: 'h-9 w-9 shrink-0 rounded-xl border bg-background/90 shadow-sm',
 };
 
 const ICON_CLASS = {

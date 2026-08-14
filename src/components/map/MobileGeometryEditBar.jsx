@@ -13,7 +13,7 @@ export default function MobileGeometryEditBar({ elementType, onCancel, onFinish 
 
   return (
     <>
-      <div className="fixed top-14 inset-x-3 z-[1002] pointer-events-none">
+      <div className="fixed top-[7.5rem] inset-x-3 z-[1002] pointer-events-none md:top-[5.5rem]">
         <div className="mx-auto max-w-md rounded-full border bg-card/95 px-4 py-2 text-center text-xs font-medium shadow-lg backdrop-blur-sm">
           {hint}
         </div>

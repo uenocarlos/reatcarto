@@ -7,8 +7,10 @@ import ElementPopup from './ElementPopup';
 import ElementLayersPanel from './ElementLayersPanel';
 import LocateMapButton from './LocateMapButton';
 import { createColoredIcon, iconSizeForZoom } from './pointIcon';
+import { parseElementGeojson, parseElementStyle } from './export/exportMapUtils';
 import { getBasemapTileProps, MAP_MAX_ZOOM } from '@/lib/basemaps';
 import { editableRingIndexes, isClosedRing, midpointHandles } from '@/lib/editableGeometry';
+import { cn } from '@/lib/utils';
 
 /** Garante que a vista inicial seja aplicada após montagem do mapa. */
 function MapInitialView({ view, suppressRef }) {
@@ -221,19 +223,15 @@ const drawVertexIcon = L.divIcon({
  * so the shape follows the vertex as the user moves it.
  */
 function EditableShape({ element, type, style, onGeometryChange, onContextMenu }) {
-  const geojson = JSON.parse(element.geojson);
-  const baseLngLat = type === 'line' ? geojson.coordinates : geojson.coordinates[0];
-  const closed = type === 'polygon' && isClosedRing(baseLngLat);
-  const vertexIndexes = type === 'polygon' ? editableRingIndexes(baseLngLat) : baseLngLat.map((_, i) => i);
-  const midpoints = midpointHandles(baseLngLat, closed);
-
   const pathRef = useRef(null);
-  const coordsRef = useRef(baseLngLat.map((c) => [c[0], c[1]]));
+  const coordsRef = useRef([]);
   const midpointDragRef = useRef(null);
 
   useEffect(() => {
-    const g = JSON.parse(element.geojson);
+    const g = parseElementGeojson(element);
+    if (!g?.coordinates) return;
     const next = type === 'line' ? g.coordinates : g.coordinates[0];
+    if (!Array.isArray(next)) return;
     coordsRef.current = next.map((c) => [c[0], c[1]]);
     midpointDragRef.current = null;
     const layer = pathRef.current;
@@ -242,6 +240,17 @@ function EditableShape({ element, type, style, onGeometryChange, onContextMenu }
       layer.setLatLngs(type === 'polygon' ? [latlngs] : latlngs);
     }
   }, [element.geojson, type]);
+
+  const geojson = parseElementGeojson(element);
+  if (!geojson?.coordinates) return null;
+  const baseLngLat = type === 'line' ? geojson.coordinates : geojson.coordinates[0];
+  if (!Array.isArray(baseLngLat)) return null;
+  if (coordsRef.current.length === 0) {
+    coordsRef.current = baseLngLat.map((c) => [c[0], c[1]]);
+  }
+  const closed = type === 'polygon' && isClosedRing(baseLngLat);
+  const vertexIndexes = type === 'polygon' ? editableRingIndexes(baseLngLat) : baseLngLat.map((_, i) => i);
+  const midpoints = midpointHandles(baseLngLat, closed);
 
   const commitGeometry = (next) => {
     if (type === 'line') {
@@ -376,8 +385,9 @@ function MapElements({ elements, onElementLongPress, tempLine, editingElementId,
   return (
     <>
       {elements.map((el) => {
-        const geojson = JSON.parse(el.geojson);
-        const style = el.style ? JSON.parse(el.style) : {};
+        const geojson = parseElementGeojson(el);
+        const style = parseElementStyle(el);
+        if (!geojson?.coordinates) return null;
         const isEditing = editingElementId != null && String(el.id) === String(editingElementId);
         const popup = !isEditing ? <ElementPopup element={el} /> : null;
 
@@ -528,6 +538,7 @@ function MapControls({
   onBasemapChange,
   userInteractedRef,
   onLocated,
+  controlsTopClass = 'top-3',
 }) {
   const map = useMap();
   const [layersOpen, setLayersOpen] = useState(false);
@@ -537,7 +548,7 @@ function MapControls({
       {historyEnabled ? (
         <div
           ref={bindLeafletControlEvents}
-          className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex gap-2"
+          className={cn('absolute left-1/2 -translate-x-1/2 z-[1000] flex gap-2', controlsTopClass)}
         >
           <Button
             variant="secondary"
@@ -564,7 +575,7 @@ function MapControls({
 
       <div
         ref={bindLeafletControlEvents}
-        className="absolute top-3 right-3 z-[1000] flex flex-col gap-2 items-end"
+        className={cn('absolute right-3 z-[1000] flex flex-col gap-2 items-end', controlsTopClass)}
       >
         {showLocateControl ? (
           <LocateMapButton
@@ -573,9 +584,7 @@ function MapControls({
             userInteractedRef={userInteractedRef}
             onLocated={onLocated}
           />
-        ) : (
-          <div className="h-12 w-12 pointer-events-none" aria-hidden />
-        )}
+        ) : null}
 
         {layersEnabled ? (
           <ElementLayersPanel
@@ -626,6 +635,7 @@ export default function LeafletMap({
   showDecorativeBorder = false,
   showLocateControl = true,
   onLocated,
+  controlsTopClass = 'top-3',
 }) {
   const [tempFreehand, setTempFreehand] = useState([]);
   const [pointByPointCoords, setPointByPointCoords] = useState([]);
@@ -763,6 +773,7 @@ export default function LeafletMap({
           onBasemapChange={setBasemap}
           userInteractedRef={userInteractedRef}
           onLocated={onLocated}
+          controlsTopClass={controlsTopClass}
         />
       </MapContainer>
 

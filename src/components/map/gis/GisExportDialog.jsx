@@ -33,6 +33,18 @@ const STEPS = {
   downloading: 'downloading',
 };
 
+function overlayPendingElements(fetched = [], live = []) {
+  const byId = new Map(fetched.map((el) => [String(el.id), el]));
+  for (const el of live) {
+    if (!el?.id) continue;
+    const id = String(el.id);
+    if (el._pending || el._queued || !byId.has(id)) {
+      byId.set(id, el);
+    }
+  }
+  return [...byId.values()];
+}
+
 export default function GisExportDialog({
   open,
   onOpenChange,
@@ -65,11 +77,16 @@ export default function GisExportDialog({
     setIncompleteWarning(preparedMapIncomplete);
     let cancelled = false;
     setLoadingElements(true);
+    if (!isOnline()) {
+      setLoadingElements(false);
+      return;
+    }
     fetchElements(mapId)
       .then((all) => {
         if (cancelled) return;
-        setLoadedElements(all);
-        setSelectedIds(new Set(all.map((element) => String(element.id))));
+        const merged = overlayPendingElements(all, elements);
+        setLoadedElements(merged);
+        setSelectedIds(new Set(merged.map((element) => String(element.id))));
       })
       .catch(() => {
         if (!cancelled) setLoadedElements(elements);
@@ -143,7 +160,7 @@ export default function GisExportDialog({
     setStep(STEPS.downloading);
     try {
       if (format === 'geojson') {
-        exportGeoJson(collection, fileName);
+        await exportGeoJson(collection, fileName);
         toast.success('GeoJSON baixado com sucesso.');
       } else {
         await exportShp({

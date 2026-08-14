@@ -1,4 +1,61 @@
+import { Capacitor } from '@capacitor/core';
+import { Directory, Filesystem } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { EXPORT_COORD_PRECISION, EXPORT_STYLE_KEYS } from './constants';
+
+const DOWNLOAD_FRAME_ID = 'reatcarto-download-frame';
+const EXPORT_DIR = 'reatcarto-exports';
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Falha ao ler o arquivo.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function isShareCanceled(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('cancel') || error?.code === 'SHARE_CANCELED';
+}
+
+async function shareNativeFile(blob, fileName) {
+  const data = await blobToBase64(blob);
+  try {
+    await Filesystem.mkdir({
+      path: EXPORT_DIR,
+      directory: Directory.Cache,
+      recursive: true,
+    });
+  } catch {
+    /* already exists */
+  }
+  const path = `${EXPORT_DIR}/${fileName}`;
+  await Filesystem.writeFile({
+    path,
+    directory: Directory.Cache,
+    data,
+  });
+  const { uri } = await Filesystem.getUri({
+    path,
+    directory: Directory.Cache,
+  });
+  try {
+    await Share.share({
+      title: fileName,
+      files: [uri],
+      dialogTitle: fileName,
+    });
+  } catch (error) {
+    if (isShareCanceled(error)) return;
+    throw error;
+  }
+}
 
 const SIMPLE_GEOMETRY_TYPES = new Set([
   'Point',
@@ -138,9 +195,27 @@ export function buildFeatureCollection(elements = [], options = {}) {
  *   createObjectURL?: (blob: Blob) => string,
  *   revokeObjectURL?: (url: string) => void,
  *   documentRef?: Document,
+ *   isNative?: () => boolean,
+ *   shareNative?: (blob: Blob, fileName: string) => Promise<void>,
  * }} [deps]
  */
-export function triggerDownload(blob, fileName, deps = {}) {
+export async function triggerDownload(blob, fileName, deps = {}) {
+  const isNative = deps.isNative ?? (() => Capacitor.isNativePlatform());
+  if (isNative()) {
+    try {
+      const shareNative = deps.shareNative ?? shareNativeFile;
+      await shareNative(blob, fileName);
+      return;
+    } catch (error) {
+      const wrapped = new GisExportError(
+        'storage_error',
+        error?.message || 'Não foi possível salvar o arquivo no dispositivo.',
+      );
+      wrapped.cause = error;
+      throw wrapped;
+    }
+  }
+
   const doc = deps.documentRef ?? (typeof document !== 'undefined' ? document : null);
   const createObjectURL = deps.createObjectURL
     ?? (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
@@ -166,13 +241,26 @@ export function triggerDownload(blob, fileName, deps = {}) {
     throw wrapped;
   }
 
+  let frame = doc.getElementById(DOWNLOAD_FRAME_ID);
+  if (!frame) {
+    frame = doc.createElement('iframe');
+    frame.id = DOWNLOAD_FRAME_ID;
+    frame.name = DOWNLOAD_FRAME_ID;
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.display = 'none';
+    doc.body.appendChild(frame);
+  }
+
   const anchor = doc.createElement('a');
   anchor.href = url;
   anchor.download = fileName;
+  anchor.rel = 'noopener';
+  // If the UA ignores `download` (common in WebViews), keep the blob out of the app window.
+  anchor.target = DOWNLOAD_FRAME_ID;
   doc.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  revokeObjectURL(url);
+  setTimeout(() => revokeObjectURL(url), 2000);
 }
 
 /**
@@ -180,7 +268,7 @@ export function triggerDownload(blob, fileName, deps = {}) {
  * @param {string} fileName
  * @param {object} [deps]
  */
-export function exportGeoJsonToFile(collection, fileName, deps = {}) {
+export async function exportGeoJsonToFile(collection, fileName, deps = {}) {
   const payload = {
     type: 'FeatureCollection',
     features: collection?.features ?? [],
@@ -198,6 +286,6 @@ export function exportGeoJsonToFile(collection, fileName, deps = {}) {
   }
 
   const blob = new BlobImpl([json], { type: 'application/geo+json' });
-  triggerDownload(blob, fileName, deps);
+  await triggerDownload(blob, fileName, deps);
   return { fileName, mimeType: 'application/geo+json', blob };
 }
