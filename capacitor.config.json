@@ -2,5 +2,20 @@
   "appId": "com.reatcarto.app",
   "appName": "ReatCarto",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": ["reatcarto.furg.br", "200.132.255.26"]
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorCookies": {
+      "enabled": true
+    }
+  }
 }

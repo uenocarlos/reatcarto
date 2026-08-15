@@ -7,19 +7,14 @@ const offlineGetMapMock = vi.fn();
 const storeGetElementsMock = vi.fn();
 const storeGetAllOutboxMock = vi.fn();
 
-vi.mock('@/api/http', () => ({
-  API_BASE_URL: '/php',
-  ApiError: class ApiError extends Error {
-    constructor(code, message, status, fields = {}) {
-      super(message);
-      this.name = 'ApiError';
-      this.code = code;
-      this.status = status;
-      this.fields = fields;
-    }
-  },
-  apiFetch: vi.fn(),
-}));
+vi.mock('@/api/http', async () => {
+  const actual = await vi.importActual('@/api/http');
+  return {
+    ...actual,
+    API_BASE_URL: '/php',
+    apiFetch: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/offline/connectivity', () => ({
   isOnline: () => isOnlineMock(),

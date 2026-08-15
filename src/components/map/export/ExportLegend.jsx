@@ -1,6 +1,7 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getIconSvg } from '@/components/map/iconSvgs';
 import { anchorLegendInsideBottomRight } from '@/lib/export/session';
+import { resolveApiAssetUrl } from '@/api/http';
 
 /** Resolve CSS stroke-dasharray from style dash fields. */
 function dashArrayFromStyle(dash) {
@@ -78,7 +79,7 @@ function LegendSymbol({ item }) {
     return (
       <span className="export-legend__symbol export-legend__symbol--point-bitmap" aria-hidden>
         <img
-          src={customUrl}
+          src={resolveApiAssetUrl(customUrl)}
           alt=""
           className="export-legend__symbol-img"
           onError={(event) => {
@@ -92,7 +93,7 @@ function LegendSymbol({ item }) {
   const iconPathUrl = style.icon_name && (String(style.icon_name).startsWith('/')
     || String(style.icon_name).startsWith('http')
     || String(style.icon_name).endsWith('.svg'))
-    ? style.icon_name
+    ? resolveApiAssetUrl(style.icon_name)
     : null;
 
   if (iconPathUrl) {

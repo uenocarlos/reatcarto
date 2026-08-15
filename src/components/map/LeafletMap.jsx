@@ -9,7 +9,8 @@ import LocateMapButton from './LocateMapButton';
 import { createColoredIcon, iconSizeForZoom } from './pointIcon';
 import { parseElementGeojson, parseElementStyle } from './export/exportMapUtils';
 import { getBasemapTileProps, MAP_MAX_ZOOM } from '@/lib/basemaps';
-import { editableRingIndexes, isClosedRing, midpointHandles } from '@/lib/editableGeometry';
+import { editableRingIndexes, isClosedRing, midpointHandles, canFinishPolygonPoints } from '@/lib/editableGeometry';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
 /** Garante que a vista inicial seja aplicada após montagem do mapa. */
@@ -135,9 +136,7 @@ function DrawingHandler({ activeTool, drawingMode, onAddPoint, onFreehandMove, o
         if (!drawing) return;
         drawing = false;
         map.dragging.enable();
-        if (points.length > 2) {
-          onFreehandEnd([...points], activeTool);
-        }
+        onFreehandEnd([...points], activeTool);
       };
 
       // Touch events for mobile
@@ -163,9 +162,7 @@ function DrawingHandler({ activeTool, drawingMode, onAddPoint, onFreehandMove, o
         if (!drawing) return;
         drawing = false;
         map.dragging.enable();
-        if (points.length > 2) {
-          onFreehandEnd([...points], activeTool);
-        }
+        onFreehandEnd([...points], activeTool);
       };
 
       map.on('mousedown', onMouseDown);
@@ -676,23 +673,33 @@ export default function LeafletMap({
 
   const handleFreehandEnd = (points, type) => {
     setTempFreehand([]);
-    if (type === 'line') {
-      const geojson = { type: 'LineString', coordinates: points.map(p => [p[1], p[0]]) };
-      onNewElement('line', JSON.stringify(geojson));
-    } else {
+    if (type === 'polygon') {
+      if (!canFinishPolygonPoints(points)) {
+        toast.error('O polígono precisa de pelo menos 3 pontos para ser finalizado.');
+        return;
+      }
       const closed = [...points, points[0]];
       const geojson = { type: 'Polygon', coordinates: [closed.map(p => [p[1], p[0]])] };
       onNewElement('polygon', JSON.stringify(geojson));
+      return;
+    }
+    if (type === 'line' && points.length >= 2) {
+      const geojson = { type: 'LineString', coordinates: points.map(p => [p[1], p[0]]) };
+      onNewElement('line', JSON.stringify(geojson));
     }
   };
 
   // Finish point-by-point
   const finishPointByPoint = useCallback(() => {
-    if (pointByPointCoords.length < 2) return;
     if (activeTool === 'line') {
+      if (pointByPointCoords.length < 2) return;
       const geojson = { type: 'LineString', coordinates: pointByPointCoords.map(p => [p[1], p[0]]) };
       onNewElement('line', JSON.stringify(geojson));
     } else if (activeTool === 'polygon') {
+      if (!canFinishPolygonPoints(pointByPointCoords)) {
+        toast.error('O polígono precisa de pelo menos 3 pontos para ser finalizado.');
+        return;
+      }
       const closed = [...pointByPointCoords, pointByPointCoords[0]];
       const geojson = { type: 'Polygon', coordinates: [closed.map(p => [p[1], p[0]])] };
       onNewElement('polygon', JSON.stringify(geojson));
@@ -782,7 +789,11 @@ export default function LeafletMap({
       ) : null}
 
       {/* Point-by-point finish button */}
-      {!readOnly && drawingMode === 'point-by-point' && pointByPointCoords.length >= 2 && (
+      {!readOnly && drawingMode === 'point-by-point' && (
+        activeTool === 'polygon'
+          ? canFinishPolygonPoints(pointByPointCoords)
+          : pointByPointCoords.length >= 2
+      ) && (
         <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-[1000]">
           <button
             onClick={finishPointByPoint}

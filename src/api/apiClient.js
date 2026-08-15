@@ -1,4 +1,5 @@
-import { apiFetch, API_BASE_URL, ApiError } from './http';
+import { apiFetch, API_BASE_URL, ApiError, resolveApiAssetUrl } from './http';
+import { GIS_ELEMENT_PAGE_SIZE } from '@/lib/gis/constants';
 import { isOnline } from '@/lib/offline/connectivity';
 import {
   setOfflineUserId,
@@ -32,6 +33,24 @@ function abortSignalAfter(ms) {
 
 function isNetworkError(err) {
   return err?.code === 'network_error' || err?.name === 'AbortError';
+}
+
+async function fetchAllPaginated(buildPath, mapItems) {
+  const all = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const data = await apiFetch(buildPath(page), {
+      method: 'GET',
+      signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+    });
+    const batch = mapItems(data);
+    all.push(...batch);
+    totalPages = Math.max(1, Number(data?.pagination?.total_pages) || 1);
+    if (batch.length === 0) break;
+    page += 1;
+  } while (page <= totalPages);
+  return all;
 }
 
 async function withNetworkFallback(onlineFn, offlineFn) {
@@ -141,20 +160,39 @@ function normalizeMap(map) {
 
 export function normalizeElement(element) {
   if (!element) return element;
+  let styleObj = element.style;
+  if (typeof styleObj === 'string') {
+    try {
+      styleObj = JSON.parse(styleObj);
+    } catch {
+      styleObj = {};
+    }
+  }
+  if (styleObj && typeof styleObj === 'object' && styleObj.custom_icon_url) {
+    styleObj = { ...styleObj, custom_icon_url: resolveApiAssetUrl(styleObj.custom_icon_url) };
+  }
   const style =
-    typeof element.style === 'string' ? element.style : JSON.stringify(element.style ?? {});
+    typeof element.style === 'string' && !styleObj?.custom_icon_url
+      ? element.style
+      : JSON.stringify(styleObj ?? {});
   const geojson =
     typeof element.geojson === 'string' ? element.geojson : JSON.stringify(element.geojson ?? {});
-  const photos = element.photos ?? [];
-  const videos = element.videos ?? [];
+  const photos = (element.photos ?? []).map((p) => ({
+    ...p,
+    url: resolveApiAssetUrl(p.url || `${API_BASE_URL}/photos/get.php?id=${encodeURIComponent(p.id)}`),
+  }));
+  const videos = (element.videos ?? []).map((v) => ({
+    ...v,
+    url: resolveApiAssetUrl(v.url || `${API_BASE_URL}/videos/get.php?id=${encodeURIComponent(v.id)}`),
+  }));
   return {
     ...element,
     style,
     geojson,
     is_publicly_visible: element.is_publicly_visible !== false && element.is_publicly_visible !== 0,
-    photo_urls: photos.map((p) => p.url || `/php/photos/get.php?id=${encodeURIComponent(p.id)}`),
+    photo_urls: photos.map((p) => p.url),
     photos,
-    video_urls: videos.map((v) => v.url || `/php/videos/get.php?id=${encodeURIComponent(v.id)}`),
+    video_urls: videos.map((v) => v.url),
     videos,
   };
 }
@@ -355,14 +393,31 @@ export const api = {
       filter: async ({ map_id, page, pageSize }) => {
         return withNetworkFallback(
           async () => {
-            const params = new URLSearchParams({ map_id });
-            if (page) params.set('page', String(page));
-            if (pageSize) params.set('page_size', String(pageSize));
-            const data = await apiFetch(`/elements/list.php?${params}`, {
-              method: 'GET',
-              signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
-            });
-            const server = (data.elements ?? []).map(normalizeElement);
+            const loadPage = async (pageNum, size) => {
+              const params = new URLSearchParams({ map_id, page: String(pageNum) });
+              params.set('page_size', String(size));
+              const data = await apiFetch(`/elements/list.php?${params}`, {
+                method: 'GET',
+                signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
+              });
+              return data;
+            };
+            if (page || pageSize) {
+              const data = await loadPage(page || 1, pageSize || GIS_ELEMENT_PAGE_SIZE);
+              const server = (data.elements ?? []).map(normalizeElement);
+              return mergeLocalPendingElements(map_id, server);
+            }
+            const server = await fetchAllPaginated(
+              (pageNum) => {
+                const params = new URLSearchParams({
+                  map_id,
+                  page: String(pageNum),
+                  page_size: String(GIS_ELEMENT_PAGE_SIZE),
+                });
+                return `/elements/list.php?${params}`;
+              },
+              (data) => (data.elements ?? []).map(normalizeElement)
+            );
             return mergeLocalPendingElements(map_id, server);
           },
           () => readOfflineElements(map_id)
@@ -411,6 +466,8 @@ export const api = {
                 body[key] = JSON.stringify(payload[key]);
               } else if (key === 'geojson' && typeof payload[key] !== 'string') {
                 body[key] = JSON.stringify(payload[key]);
+              } else if (key === 'is_publicly_visible') {
+                body[key] = payload[key] !== false && payload[key] !== 0 && payload[key] !== 'false' && payload[key] !== 'f';
               } else {
                 body[key] = payload[key];
               }
@@ -446,7 +503,10 @@ export const api = {
         throw new ApiError('offline', 'A biblioteca de ícones requer conexão com a internet.', 0);
       }
       const data = await apiFetch('/icons/list.php', { method: 'GET' });
-      return data.icons ?? [];
+      return (data.icons ?? []).map((icon) => ({
+        ...icon,
+        url: resolveApiAssetUrl(icon.url),
+      }));
     },
     create: async (file, { name, clientMutationId } = {}, mutationId = newMutationIdInternal()) => {
       if (!isOnline()) {
@@ -467,7 +527,7 @@ export const api = {
       }
       return apiFetch('/icons/remove.php', { method: 'POST', body: { id } });
     },
-    url: (id) => `/php/icons/get.php?id=${encodeURIComponent(id)}`,
+    url: (id) => resolveApiAssetUrl(`/php/icons/get.php?id=${encodeURIComponent(id)}`),
   },
   media: {
     listPhotos: async ({ page = 1, pageSize } = {}) => {
@@ -495,7 +555,7 @@ export const api = {
       if (baseVersion != null) body.base_version = baseVersion;
       return apiFetch('/photos/delete.php', { method: 'DELETE', body });
     },
-    url: (photoId) => `${API_BASE_URL}/photos/get.php?id=${encodeURIComponent(photoId)}`,
+    url: (photoId) => resolveApiAssetUrl(`${API_BASE_URL}/photos/get.php?id=${encodeURIComponent(photoId)}`),
     listVideos: async ({ page = 1, pageSize } = {}) => {
       const params = new URLSearchParams({ page: String(page) });
       if (pageSize != null) params.set('page_size', String(pageSize));
@@ -521,7 +581,7 @@ export const api = {
       if (baseVersion != null) body.base_version = baseVersion;
       return apiFetch('/videos/delete.php', { method: 'DELETE', body });
     },
-    videoUrl: (videoId) => `${API_BASE_URL}/videos/get.php?id=${encodeURIComponent(videoId)}`,
+    videoUrl: (videoId) => resolveApiAssetUrl(`${API_BASE_URL}/videos/get.php?id=${encodeURIComponent(videoId)}`),
   },
   sync: {
     push: async (mutations, options = {}) => {
@@ -603,23 +663,37 @@ export const api = {
       return data.map;
     },
     listElements: async (publicId, { page, pageSize } = {}) => {
-      const params = new URLSearchParams({ public_id: publicId });
-      if (page) params.set('page', String(page));
-      if (pageSize) params.set('page_size', String(pageSize));
-      const data = await apiFetch(`/public/elements.php?${params}`, { method: 'GET' });
       const safeNormalize = (el) => {
         const normalized = normalizeElement(el);
         delete normalized.map_id;
         delete normalized.author_id;
         return normalized;
       };
-      return {
-        elements: (data.elements ?? []).map(safeNormalize),
-        pagination: data.pagination,
-      };
+      if (page || pageSize) {
+        const params = new URLSearchParams({ public_id: publicId });
+        if (page) params.set('page', String(page));
+        if (pageSize) params.set('page_size', String(pageSize));
+        const data = await apiFetch(`/public/elements.php?${params}`, { method: 'GET' });
+        return {
+          elements: (data.elements ?? []).map(safeNormalize),
+          pagination: data.pagination,
+        };
+      }
+      const elements = await fetchAllPaginated(
+        (pageNum) => {
+          const params = new URLSearchParams({
+            public_id: publicId,
+            page: String(pageNum),
+            page_size: String(GIS_ELEMENT_PAGE_SIZE),
+          });
+          return `/public/elements.php?${params}`;
+        },
+        (data) => (data.elements ?? []).map(safeNormalize)
+      );
+      return { elements, pagination: { page: 1, page_size: elements.length, total: elements.length, total_pages: 1 } };
     },
     getPhoto: (photoId) =>
-      `${API_BASE_URL}/public/photo.php?id=${encodeURIComponent(photoId)}`,
+      resolveApiAssetUrl(`${API_BASE_URL}/public/photo.php?id=${encodeURIComponent(photoId)}`),
   },
   admin: {
     listUsers: async ({ q, page, pageSize } = {}) => {

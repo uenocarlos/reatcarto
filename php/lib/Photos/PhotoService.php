@@ -414,9 +414,9 @@ function photos_serve_bytes(?array $user, string $photoId, bool $publicOnly): ne
         auth_fail('not_found', 'Photo not found.', 404);
     }
 
-    header('Content-Type: ' . (string) $photo['content_type']);
-    header('Content-Length: ' . (string) filesize($path));
-    header('Cache-Control: ' . ($publicOnly ? 'public, max-age=300' : 'private, max-age=3600'));
-    readfile($path);
-    exit;
+    serve_binary_file(
+        $path,
+        (string) $photo['content_type'],
+        $publicOnly ? 'public, max-age=300' : 'private, max-age=3600'
+    );
 }

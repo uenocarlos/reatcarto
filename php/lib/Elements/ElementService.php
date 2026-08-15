@@ -285,7 +285,7 @@ function elements_create(array $user, array $input): array
                 :description,
                 :element_category,
                 :style::jsonb,
-                :is_publicly_visible,
+                CAST(:is_publicly_visible AS boolean),
                 :author_id
              )
              RETURNING id'
@@ -298,7 +298,7 @@ function elements_create(array $user, array $input): array
             'description' => $description,
             'element_category' => $category,
             'style' => (string) $style,
-            'is_publicly_visible' => $isPubliclyVisible ? 't' : 'f',
+            'is_publicly_visible' => $isPubliclyVisible ? 'true' : 'false',
             'author_id' => $user['id'],
         ]);
     } catch (Throwable) {
@@ -391,8 +391,8 @@ function elements_update(array $user, array $input, bool $forceVersion = false):
     }
 
     if (array_key_exists('is_publicly_visible', $input)) {
-        $setParts[] = 'is_publicly_visible = :is_publicly_visible';
-        $params['is_publicly_visible'] = parse_bool_input($input['is_publicly_visible'], true) ? 't' : 'f';
+        $setParts[] = 'is_publicly_visible = CAST(:is_publicly_visible AS boolean)';
+        $params['is_publicly_visible'] = parse_bool_input($input['is_publicly_visible'], true) ? 'true' : 'false';
     }
 
     if (array_key_exists('geojson', $input)) {

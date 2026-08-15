@@ -22,7 +22,6 @@ import GpsTracker from '@/components/map/GpsTracker';
 import CitySearchControl from '@/components/map/CitySearchControl';
 import LocateMapButton from '@/components/map/LocateMapButton';
 import { useAuth } from '@/lib/AuthContext';
-import { loadMunicipalitySearchIndex } from '@/lib/geocodeCities';
 import {
   createCategoryFromLabel,
   loadLocalElementCategories,
@@ -56,6 +55,7 @@ import {
   viewsAlmostEqual,
 } from '@/lib/mapViewport';
 import { getOfflineUserId, storeForUser } from '@/lib/offline/offlineApi';
+import { canFinishPolygonPoints } from '@/lib/editableGeometry';
 
 const ExportMapShell = lazy(() => import('@/components/map/ExportMapShell'));
 const MemorialDialog = lazy(() => import('@/components/map/MemorialDialog'));
@@ -89,6 +89,7 @@ export default function MapEditor() {
   const [geometryEditMode, setGeometryEditMode] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishConfirmEmpty, setPublishConfirmEmpty] = useState(false);
+  const [offlinePrepared, setOfflinePrepared] = useState(false);
   const [online, setOnline] = useState(() => isOnline());
   const geometryBaselineRef = useRef(null);
   const isMobile = useIsMobile();
@@ -190,6 +191,34 @@ export default function MapEditor() {
     onError: (err) => toast.error(err.message || 'Falha ao despublicar mapa'),
   });
 
+  const prepareOfflineMutation = useMutation({
+    mutationFn: (id) => api.entities.Map.prepareOffline(id),
+    onSuccess: () => {
+      setOfflinePrepared(true);
+      toast.success('Mapa preparado para uso offline');
+    },
+    onError: (err) => toast.error(err.message || 'Falha ao preparar mapa offline'),
+  });
+
+  useEffect(() => {
+    if (!mapId || !isAuthenticated) {
+      setOfflinePrepared(false);
+      return undefined;
+    }
+    let cancelled = false;
+    api.offline
+      .listPreparedMaps()
+      .then((prepared) => {
+        if (!cancelled) setOfflinePrepared(prepared.some((m) => m.id === mapId));
+      })
+      .catch(() => {
+        if (!cancelled) setOfflinePrepared(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapId, isAuthenticated]);
+
   useEffect(() => {
     if (!mapData) return;
     mapVersionRef.current = mapData.version;
@@ -200,14 +229,6 @@ export default function MapEditor() {
       zoom: resolved.zoom,
     };
   }, [mapId, mapData?.id, mapData?.version, mapData?.center_lat, mapData?.center_lng, mapData?.zoom, mapData?.updated_at]);
-
-  // Pré-carrega índice local de municípios (busca do header)
-  useEffect(() => {
-    if (!mapData) return undefined;
-    const controller = new AbortController();
-    void loadMunicipalitySearchIndex({ signal: controller.signal }).catch(() => {});
-    return () => controller.abort();
-  }, [mapData?.id]);
 
   useEffect(() => {
     if (!isMobile) return undefined;
@@ -635,6 +656,10 @@ export default function MapEditor() {
   }, [activeTool, drawingMode]);
 
   const handleGpsTrackFinish = (points) => {
+    if (activeTool === 'polygon' && !canFinishPolygonPoints(points)) {
+      toast.error('O polígono precisa de pelo menos 3 pontos para ser finalizado.');
+      return;
+    }
     if (points.length < 2) return;
     if (activeTool === 'line') {
       const geojson = { type: 'LineString', coordinates: points.map(p => [p[1], p[0]]) };
@@ -1234,6 +1259,15 @@ export default function MapEditor() {
       : undefined;
   const dockMemorialDisabled = editorOffline;
   const dockMemorialDisabledReason = editorOffline ? 'Indisponível offline' : undefined;
+  const dockPrepareOfflineDisabled =
+    dockAuthBlocked || editorOffline || prepareOfflineMutation.isPending;
+  const dockPrepareOfflineDisabledReason = !isAuthenticated
+    ? 'Faça login para usar o mapa offline'
+    : editorOffline
+      ? 'Conecte-se à internet para preparar o mapa'
+      : prepareOfflineMutation.isPending
+        ? 'Preparando mapa para uso offline...'
+        : undefined;
 
   return (
     <div className="relative h-screen overflow-hidden overscroll-none bg-background">
@@ -1300,6 +1334,14 @@ export default function MapEditor() {
             publishDisabled={dockPublishDisabled}
             publishDisabledReason={dockPublishDisabledReason}
             unpublishDisabled={unpublishMutation.isPending || editorOffline}
+            onPrepareOffline={() => {
+              if (dockPrepareOfflineDisabled) return;
+              prepareOfflineMutation.mutate(mapData.id);
+            }}
+            offlinePrepared={offlinePrepared}
+            prepareOfflineDisabled={dockPrepareOfflineDisabled}
+            prepareOfflineDisabledReason={dockPrepareOfflineDisabledReason}
+            prepareOfflineBusy={prepareOfflineMutation.isPending}
             onSync={handleDockSync}
             exportDisabled={dockExportDisabled}
             exportDisabledReason={dockExportDisabledReason}

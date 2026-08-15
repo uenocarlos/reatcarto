@@ -8,6 +8,51 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import AuthShell from '@/components/layout/AuthShell';
 
+const REGISTER_FIELDS = [
+  ['username', 'Usuário', 'text'],
+  ['email', 'Email', 'email'],
+  ['full_name', 'Nome completo', 'text'],
+  ['organization', 'Organização', 'text'],
+  ['job_title', 'Cargo', 'text'],
+  ['phone', 'Telefone', 'tel'],
+  ['password', 'Senha', 'password'],
+  ['password_confirmation', 'Confirmar senha', 'password'],
+];
+
+/** @internal Exported for unit tests */
+export function validateRegisterForm(form) {
+  const errors = {};
+  for (const [key, label] of REGISTER_FIELDS) {
+    if (!String(form[key] ?? '').trim()) {
+      errors[key] = `Informe ${label.toLowerCase()}`;
+    }
+  }
+  if (
+    form.password
+    && form.password_confirmation
+    && form.password !== form.password_confirmation
+  ) {
+    errors.password_confirmation = 'As senhas não coincidem';
+  }
+  if (!form.consent) {
+    errors.consent = 'Aceite os Termos de Uso e a Política de Privacidade';
+  }
+  return errors;
+}
+
+function applyRegisterError(error, setFieldErrors) {
+  const fields = error instanceof ApiError ? error.fields : null;
+  if (fields && Object.keys(fields).length) {
+    setFieldErrors(fields);
+    return;
+  }
+  if (error instanceof ApiError) {
+    toast.error(error.message || 'Não foi possível cadastrar.');
+    return;
+  }
+  toast.error('Erro de conexão. Tente novamente.');
+}
+
 export default function Register() {
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -29,7 +74,12 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setFieldErrors({});
+    const errors = validateRegisterForm(form);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      return;
+    }
+
     setLoading(true);
     try {
       const result = await api.auth.register({ ...form, consent_accepted: form.consent });
@@ -43,33 +93,16 @@ export default function Register() {
       toast.success('Conta criada com sucesso!');
       navigate('/');
     } catch (error) {
-      if (error instanceof ApiError && error.fields) {
-        setFieldErrors(error.fields);
-      } else if (error instanceof ApiError) {
-        toast.error(error.message);
-      } else {
-        toast.error('Erro de conexão. Tente novamente.');
-      }
+      applyRegisterError(error, setFieldErrors);
     } finally {
       setLoading(false);
     }
   };
 
-  const fields = [
-    ['username', 'Usuário', 'text'],
-    ['email', 'Email', 'email'],
-    ['full_name', 'Nome completo', 'text'],
-    ['organization', 'Organização', 'text'],
-    ['job_title', 'Cargo', 'text'],
-    ['phone', 'Telefone', 'tel'],
-    ['password', 'Senha', 'password'],
-    ['password_confirmation', 'Confirmar senha', 'password'],
-  ];
-
   return (
     <AuthShell title="Criar conta profissional" wide backTo="/login" showLogo={false}>
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
-            {fields.map(([key, label, type]) => (
+            {REGISTER_FIELDS.map(([key, label, type]) => (
               <div key={key} className="space-y-1">
                 <label htmlFor={key} className="text-sm font-medium">
                   {label}
@@ -89,14 +122,15 @@ export default function Register() {
               </div>
             ))}
 
-            <div className="flex items-start gap-2">
+            <div className="flex items-start gap-3 py-2">
               <Checkbox
                 id="consent"
                 checked={form.consent}
                 onCheckedChange={(v) => setField('consent', !!v)}
                 aria-invalid={!!fieldErrors.consent}
+                className="mt-0.5 h-5 w-5"
               />
-              <label htmlFor="consent" className="text-sm leading-tight">
+              <label htmlFor="consent" className="text-sm leading-tight min-h-11 flex items-center">
                 Aceito os Termos de Uso e a Política de Privacidade
               </label>
             </div>
@@ -106,7 +140,7 @@ export default function Register() {
               </p>
             )}
 
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full min-h-11" disabled={loading}>
               {loading ? 'Cadastrando...' : 'Cadastrar'}
             </Button>
           </form>

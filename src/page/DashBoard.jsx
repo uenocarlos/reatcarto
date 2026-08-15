@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/apiClient';
 import { useNavigate } from 'react-router-dom';
@@ -16,8 +16,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { MapPin, Plus, Pencil, Trash2, Map as MapIcon, FolderOpen, Layers, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { format } from 'date-fns';
-import LeafletMap from '@/components/map/LeafletMap';
 import AppShell, { IDENTITY_CARD_CLASS } from '@/components/layout/AppShell';
+
+const LeafletMap = lazy(() => import('@/components/map/LeafletMap'));
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -59,6 +60,7 @@ export default function Dashboard() {
       setFormData({ name: '', description: '' });
       navigate(`/editor/${newMap.id}`);
     },
+    onError: (err) => toast.error(err.message || 'Falha ao criar mapa'),
   });
 
   const updateMutation = useMutation({
@@ -270,6 +272,7 @@ export default function Dashboard() {
           </>
         ) : (
           <div className="h-[70vh] rounded-2xl overflow-hidden border shadow-xl relative">
+            <Suspense fallback={<div className="h-full flex items-center justify-center"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>}>
             <LeafletMap 
               center={[-32.035, -52.1]} 
               zoom={12} 
@@ -278,6 +281,7 @@ export default function Dashboard() {
               onNewElement={() => {}}
               onElementLongPress={() => {}}
             />
+            </Suspense>
             <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 max-w-[220px]">
               <Button
                 type="button"

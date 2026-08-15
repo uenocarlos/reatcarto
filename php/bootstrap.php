@@ -109,6 +109,49 @@ function json_error(string $code, string $message, int $status = 400, array $fie
     ], $status);
 }
 
+function serve_binary_file(string $path, string $contentType, string $cacheControl, bool $acceptRanges = false): never
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+
+    if (!is_file($path) || !is_readable($path)) {
+        json_error('not_found', 'File not found.', 404);
+    }
+
+    $size = (int) filesize($path);
+    header('Content-Type: ' . $contentType);
+    header('Cache-Control: ' . $cacheControl);
+    header('X-Content-Type-Options: nosniff');
+
+    if ($acceptRanges) {
+        header('Accept-Ranges: bytes');
+        $range = $_SERVER['HTTP_RANGE'] ?? '';
+        if (preg_match('/^bytes=(\d*)-(\d*)$/', $range, $m) === 1) {
+            $start = $m[1] === '' ? 0 : (int) $m[1];
+            $end = $m[2] === '' ? $size - 1 : (int) $m[2];
+            if ($start <= $end && $end < $size) {
+                http_response_code(206);
+                header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+                header('Content-Length: ' . (string) ($end - $start + 1));
+                $fh = fopen($path, 'rb');
+                if ($fh !== false) {
+                    fseek($fh, $start);
+                    echo fread($fh, $end - $start + 1) ?: '';
+                    fclose($fh);
+                }
+                exit;
+            }
+        }
+    } else {
+        header('Accept-Ranges: none');
+    }
+
+    header('Content-Length: ' . (string) $size);
+    readfile($path);
+    exit;
+}
+
 function current_user_id(): ?string
 {
     return isset($_SESSION['user_id']) ? (string) $_SESSION['user_id'] : null;

@@ -3,6 +3,8 @@ import {
   editableRingIndexes,
   isClosedRing,
   midpointHandles,
+  uniqueLatLngPoints,
+  canFinishPolygonPoints,
 } from '@/lib/editableGeometry';
 
 describe('editableGeometry', () => {
@@ -40,5 +42,23 @@ describe('editableGeometry', () => {
       { key: '1-2', insertAt: 2, lat: 2, lng: 4 },
       { key: '2-0', insertAt: 3, lat: 2, lng: 2 },
     ]);
+  });
+
+  it('collapses freehand jitter when counting unique polygon points', () => {
+    expect(uniqueLatLngPoints([[0, 0], [0, 0], [1, 0]])).toEqual([[0, 0], [1, 0]]);
+    expect(uniqueLatLngPoints([
+      [0, 0],
+      [0.00000001, 0],
+      [1, 0],
+      [1, 1],
+    ])).toEqual([[0, 0], [1, 0], [1, 1]]);
+  });
+
+  it('blocks finishing a polygon with fewer than 3 distinct points', () => {
+    expect(canFinishPolygonPoints([])).toBe(false);
+    expect(canFinishPolygonPoints([[0, 0]])).toBe(false);
+    expect(canFinishPolygonPoints([[0, 0], [1, 0]])).toBe(false);
+    expect(canFinishPolygonPoints([[0, 0], [0, 0], [0, 0]])).toBe(false);
+    expect(canFinishPolygonPoints([[0, 0], [1, 0], [1, 1]])).toBe(true);
   });
 });

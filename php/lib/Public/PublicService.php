@@ -106,7 +106,7 @@ function public_elements_list(string $publicId, int $page = 1, int $pageSize = D
 
     $countStmt = db()->prepare(
         'SELECT COUNT(*) FROM map_elements
-         WHERE map_id = :map_id AND is_publicly_visible = true'
+         WHERE map_id = :map_id AND is_publicly_visible IS TRUE'
     );
     $countStmt->execute(['map_id' => $mapId]);
     $total = (int) $countStmt->fetchColumn();
@@ -114,7 +114,7 @@ function public_elements_list(string $publicId, int $page = 1, int $pageSize = D
     $stmt = db()->prepare(
         'SELECT e.*, ST_AsGeoJSON(e.geom)::text AS geojson
          FROM map_elements e
-         WHERE e.map_id = :map_id AND e.is_publicly_visible = true
+         WHERE e.map_id = :map_id AND e.is_publicly_visible IS TRUE
          ORDER BY e.created_at ASC
          LIMIT :limit OFFSET :offset'
     );

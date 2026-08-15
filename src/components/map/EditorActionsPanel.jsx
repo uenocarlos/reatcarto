@@ -5,6 +5,7 @@ import {
   Globe,
   EyeOff,
   CloudOff,
+  Download,
   RefreshCw,
   ChevronRight,
 } from 'lucide-react';
@@ -24,13 +25,14 @@ function PanelSection({ title, children, className }) {
   );
 }
 
-function PanelRow({ icon: Icon, label, description, onClick, disabled, destructive, hint }) {
+function PanelRow({ icon: Icon, label, description, onClick, disabled, destructive, hint, testId }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       title={hint}
+      data-testid={testId}
       className={cn(
         'flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/80 disabled:opacity-50 disabled:pointer-events-none',
         destructive && 'text-destructive'
@@ -63,6 +65,11 @@ export default function EditorActionsPanel({
   publishDisabled = false,
   publishDisabledReason,
   unpublishDisabled = false,
+  onPrepareOffline,
+  offlinePrepared = false,
+  prepareOfflineDisabled = false,
+  prepareOfflineDisabledReason,
+  prepareOfflineBusy = false,
   onSync,
   gisExportDisabled = false,
   gisExportDisabledReason,
@@ -116,6 +123,21 @@ export default function EditorActionsPanel({
             hint={publishDisabledReason}
           />
         )}
+        <PanelRow
+          icon={Download}
+          label="Usar o mapa offline"
+          description={
+            prepareOfflineBusy
+              ? 'Preparando mapa para uso offline...'
+              : offlinePrepared
+                ? 'Já disponível offline — toque para atualizar'
+                : 'Baixar este mapa para editar sem internet'
+          }
+          onClick={onPrepareOffline}
+          disabled={prepareOfflineDisabled}
+          hint={prepareOfflineDisabledReason || 'Preparar mapa para uso offline'}
+          testId="prepare-offline-entry"
+        />
       </PanelSection>
 
       {(pendingCount > 0 || offline) ? (

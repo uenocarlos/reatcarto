@@ -1,3 +1,30 @@
+export const MIN_POLYGON_VERTICES = 3;
+
+/**
+ * Drops consecutive duplicates (and near-duplicates from freehand jitter).
+ * `points` are `[lat, lng]` as captured during drawing.
+ */
+export function uniqueLatLngPoints(points, tolerance = 1e-7) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  const unique = [points[0]];
+  for (let i = 1; i < points.length; i += 1) {
+    const prev = unique[unique.length - 1];
+    const cur = points[i];
+    if (!cur || cur.length < 2) continue;
+    if (
+      Math.abs(prev[0] - cur[0]) > tolerance
+      || Math.abs(prev[1] - cur[1]) > tolerance
+    ) {
+      unique.push(cur);
+    }
+  }
+  return unique;
+}
+
+export function canFinishPolygonPoints(points) {
+  return uniqueLatLngPoints(points).length >= MIN_POLYGON_VERTICES;
+}
+
 /** Closed polygon rings repeat the first vertex at the end. */
 export function isClosedRing(ring) {
   if (!ring || ring.length < 2) return false;

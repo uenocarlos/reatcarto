@@ -50,6 +50,8 @@ function auth_handle_endpoint(callable $handler): never
         ], 409);
     } catch (AuthException $e) {
         json_error($e->errorCode, $e->getMessage(), $e->status, $e->fields);
+    } catch (Throwable) {
+        json_error('server_error', 'Request failed.', 500);
     }
 }
 
@@ -72,5 +74,7 @@ function auth_handle_endpoint_created(callable $handler): never
         ], 409);
     } catch (AuthException $e) {
         json_error($e->errorCode, $e->getMessage(), $e->status, $e->fields);
+    } catch (Throwable) {
+        json_error('server_error', 'Request failed.', 500);
     }
 }

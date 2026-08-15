@@ -1,4 +1,27 @@
-const API_BASE_URL = '/php';
+import { Capacitor } from '@capacitor/core';
+
+export const NATIVE_API_BASE_URL = 'https://reatcarto.furg.br:8443/php';
+const API_BASE_URL = Capacitor.isNativePlatform() ? NATIVE_API_BASE_URL : '/php';
+const NATIVE_ORIGIN = NATIVE_API_BASE_URL.replace(/\/php\/?$/, '');
+
+/** Absolute URL for PHP media and public static assets (icons, photos, videos). */
+export function resolveApiAssetUrl(pathOrUrl) {
+  const value = String(pathOrUrl ?? '').trim();
+  if (!value || /^https?:\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) {
+    return value;
+  }
+  if (value.startsWith('/php/')) {
+    return Capacitor.isNativePlatform() ? `${NATIVE_ORIGIN}${value}` : value;
+  }
+  if (value.startsWith('/icons/')) {
+    const assetPath = `/assets${value}`;
+    return Capacitor.isNativePlatform() ? `${NATIVE_ORIGIN}${assetPath}` : assetPath;
+  }
+  if (Capacitor.isNativePlatform() && value.startsWith('/')) {
+    return `${NATIVE_ORIGIN}${value}`;
+  }
+  return value;
+}
 
 export class ApiError extends Error {
   constructor(code, message, status, fields = {}) {
@@ -45,11 +68,16 @@ export async function apiFetch(path, options = {}) {
       error.code || 'unknown_error',
       error.message || 'Request failed.',
       response.status,
-      error.fields || {}
+      error.fields && typeof error.fields === 'object' ? error.fields : {}
     );
+  }
+
+  if (!isJson || payload === null) {
+    throw new ApiError('network_error', 'Network request failed.', response.status);
   }
 
   return payload;
 }
 
 export { API_BASE_URL };
+

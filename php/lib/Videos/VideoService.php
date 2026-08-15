@@ -429,10 +429,10 @@ function videos_serve_bytes(?array $user, string $videoId, bool $publicOnly): ne
         auth_fail('not_found', 'Video not found.', 404);
     }
 
-    header('Content-Type: ' . (string) $video['content_type']);
-    header('Content-Length: ' . (string) filesize($path));
-    header('Accept-Ranges: none');
-    header('Cache-Control: ' . ($publicOnly ? 'public, max-age=300' : 'private, max-age=3600'));
-    readfile($path);
-    exit;
+    serve_binary_file(
+        $path,
+        (string) $video['content_type'],
+        $publicOnly ? 'public, max-age=300' : 'private, max-age=3600',
+        true
+    );
 }

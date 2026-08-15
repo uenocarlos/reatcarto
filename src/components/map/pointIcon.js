@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { getIconSvg } from './iconSvgs';
+import { resolveApiAssetUrl } from '@/api/http';
 
 /**
  * Discrete point-icon size (px) for cartographic zoom bands.
@@ -44,7 +45,7 @@ export function createColoredIcon(color, iconName, customUrl, options = {}) {
   const className = options.className ?? '';
   const withPopupAnchor = options.withPopupAnchor === true;
 
-  const custom = String(customUrl ?? '').trim();
+  const custom = resolveApiAssetUrl(customUrl);
 
   if (custom) {
     const src = escapeAttr(custom);
@@ -60,7 +61,7 @@ export function createColoredIcon(color, iconName, customUrl, options = {}) {
     });
   }
 
-  const iconPathUrl = isIconPath(iconName) ? String(iconName) : null;
+  const iconPathUrl = isIconPath(iconName) ? resolveApiAssetUrl(iconName) : null;
 
   if (iconPathUrl) {
     const url = escapeAttr(iconPathUrl);

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Lock, User } from 'lucide-react';
 import { toast } from 'sonner';
 import AuthShell from '@/components/layout/AuthShell';
+import ApkDownloadCard from '@/components/auth/ApkDownloadCard';
 
 export default function Login({ onLoginSuccess }) {
   const [identifier, setIdentifier] = useState('');
@@ -128,6 +129,7 @@ export default function Login({ onLoginSuccess }) {
               </Link>
             </p>
           </div>
+          <ApkDownloadCard />
     </AuthShell>
   );
 }

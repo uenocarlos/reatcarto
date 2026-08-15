@@ -373,19 +373,11 @@ function icons_soft_remove(array $user, string $iconId): array
 function icons_serve(?array $user, string $iconId): never
 {
     $resolved = icons_resolve_serve($iconId, $user, false);
-    header('Content-Type: ' . $resolved['content_type']);
-    header('Content-Length: ' . (string) filesize($resolved['path']));
-    header('Cache-Control: private, max-age=3600');
-    readfile($resolved['path']);
-    exit;
+    serve_binary_file($resolved['path'], $resolved['content_type'], 'private, max-age=3600');
 }
 
 function icons_serve_public(string $iconId): never
 {
     $resolved = icons_resolve_serve($iconId, null, true);
-    header('Content-Type: ' . $resolved['content_type']);
-    header('Content-Length: ' . (string) filesize($resolved['path']));
-    header('Cache-Control: public, max-age=300');
-    readfile($resolved['path']);
-    exit;
+    serve_binary_file($resolved['path'], $resolved['content_type'], 'public, max-age=300');
 }
