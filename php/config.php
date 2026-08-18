@@ -100,6 +100,8 @@ function build_app_config(): array
         'uploads_root' => env_string('UPLOADS_ROOT', app_root() . DIRECTORY_SEPARATOR . 'uploads')
             ?? app_root() . DIRECTORY_SEPARATOR . 'uploads',
         'session' => [
+            // 0 = cookie de sessão (some ao fechar o app/WebView). Padrão: 30 dias até o Sair.
+            'lifetime' => env_int('SESSION_LIFETIME', 60 * 60 * 24 * 30),
             'secure' => env_bool('SESSION_SECURE', false),
             'httponly' => env_bool('SESSION_HTTP_ONLY', true),
             'samesite' => env_string('SESSION_SAME_SITE', 'Lax') ?? 'Lax',

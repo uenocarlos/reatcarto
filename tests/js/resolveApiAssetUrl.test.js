@@ -4,6 +4,7 @@ import { resolveApiAssetUrl } from '@/api/http';
 describe('resolveApiAssetUrl', () => {
   it('rewrites built-in SVG paths to /assets/icons so Apache FallbackResource cannot 404 them', () => {
     expect(resolveApiAssetUrl('/icons/barco01.svg')).toBe('/assets/icons/barco01.svg');
+    expect(resolveApiAssetUrl('/assets/icons/casa.svg')).toBe('/assets/icons/casa.svg');
   });
 
   it('keeps PHP media URLs on web', () => {

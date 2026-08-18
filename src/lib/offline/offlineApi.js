@@ -1,6 +1,12 @@
 import { OfflineStore, OUTBOX_STATUS } from '@/lib/offline/OfflineStore';
-import { isOnline } from '@/lib/offline/connectivity';
 import { validateOfflineGeometry } from '@/lib/offline/geometryValidation';
+import {
+  buildElementSyncPayload,
+  mergeOutboxPayloads,
+  pickStyleFallbackFields,
+  sameResourceId,
+  styleFromElement,
+} from '@/lib/offline/outboxMerge';
 
 let currentUserId = null;
 
@@ -24,6 +30,60 @@ function newLocalId() {
     return crypto.randomUUID();
   }
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/** Keep the editor optimistic id so later offline edits attach to the same outbox row. */
+export function resolveLocalElementId(payload = {}) {
+  const candidate = payload.local_id ?? payload.id;
+  if (candidate != null && String(candidate).trim() !== '') {
+    return String(candidate);
+  }
+  return newLocalId();
+}
+
+async function ensureOfflineMapReady(store, mapId, mapHint = null) {
+  if (!mapId) return;
+  if (await store.isMapPrepared(mapId)) return;
+  const existing = await store.getMap(mapId);
+  const elements = await store.getElements(mapId);
+  await store.prepareMap(existing ?? mapHint ?? { id: mapId }, elements);
+}
+
+/**
+ * Cache the open map so Android can list and draw newly inserted elements offline.
+ * Pending local rows are never overwritten by the server copy.
+ */
+export async function cacheMapForOffline(map, elements = []) {
+  if (!map?.id || !currentUserId) return { ok: false };
+  const store = storeForUser();
+  const mapId = map.id;
+  const existing = await store.getElements(mapId);
+  const pending = new Map(
+    (existing ?? [])
+      .filter((el) => el?._pending)
+      .map((el) => [String(el.id), el])
+  );
+  const merged = [];
+  const seen = new Set();
+  for (const el of elements ?? []) {
+    const id = String(el.id);
+    seen.add(id);
+    merged.push(pending.get(id) ?? el);
+  }
+  for (const [id, el] of pending) {
+    if (!seen.has(id)) merged.push(el);
+  }
+  for (const el of existing ?? []) {
+    const id = String(el.id);
+    if (!seen.has(id) && !pending.has(id)) {
+      await store.removeElement(el.id);
+    }
+  }
+  const photosMeta = merged.flatMap((el) =>
+    (el.photos ?? []).map((p) => ({ ...p, element_id: el.id }))
+  );
+  await store.prepareMap(map, merged, photosMeta);
+  return { ok: true };
 }
 
 function uuidFromBytes(bytes) {
@@ -72,12 +132,15 @@ export async function offlineListMaps() {
 
 export async function offlineGetMap(mapId) {
   const store = storeForUser();
-  const prepared = await store.isMapPrepared(mapId);
-  if (!prepared) {
-    return { unavailable: true };
-  }
-  const map = await store.getMap(mapId);
+  let map = await store.getMap(mapId);
   const elements = await store.getElements(mapId);
+  if (!(await store.isMapPrepared(mapId))) {
+    if (!map && elements.length === 0) {
+      return { unavailable: true };
+    }
+    await store.prepareMap(map ?? { id: mapId }, elements);
+    map = await store.getMap(mapId);
+  }
   return { map, elements };
 }
 
@@ -91,21 +154,24 @@ export async function offlineCreateElement(payload, clientMutationId = newMutati
   if (!validation.valid) {
     throw new Error(validation.error);
   }
-  const localId = newLocalId();
+  const localId = resolveLocalElementId(payload);
+  const parsedGeojson =
+    typeof payload.geojson === 'string' ? JSON.parse(payload.geojson) : payload.geojson;
   const element = {
     id: localId,
     map_id: payload.map_id,
     element_type: payload.element_type,
-    geojson: typeof payload.geojson === 'string' ? JSON.parse(payload.geojson) : payload.geojson,
+    geojson: parsedGeojson,
     name: payload.name?.trim() ? payload.name : 'Element',
     description: payload.description ?? '',
     element_category: payload.element_category ?? 'terra',
-    style: typeof payload.style === 'string' ? JSON.parse(payload.style) : payload.style ?? {},
+    style: styleFromElement(payload),
     is_publicly_visible: payload.is_publicly_visible !== false && payload.is_publicly_visible !== 0,
     version: 0,
     _pending: true,
     photos: [],
   };
+  await ensureOfflineMapReady(store, payload.map_id);
   await store.upsertElement(payload.map_id, element);
   await store.enqueue({
     client_mutation_id: clientMutationId,
@@ -113,16 +179,7 @@ export async function offlineCreateElement(payload, clientMutationId = newMutati
     op: 'create',
     resource_id: localId,
     base_version: null,
-    payload: {
-      map_id: payload.map_id,
-      element_type: payload.element_type,
-      geojson: element.geojson,
-      name: element.name,
-      description: element.description,
-      element_category: element.element_category,
-      style: element.style,
-      is_publicly_visible: element.is_publicly_visible,
-    },
+    payload: buildElementSyncPayload(element),
   });
   return { ...element, client_mutation_id: clientMutationId, _queued: true };
 }
@@ -140,41 +197,59 @@ export async function offlineUpdateElement(id, payload, clientMutationId = newMu
     }
   }
   const rows = await store.getAllOutbox();
-  const existing = rows.find((r) => r.resource_id === id && r.resource_type === 'element');
-  let mapId = payload.map_id;
+  const existing = rows.find(
+    (r) => sameResourceId(r.resource_id, id) && r.resource_type === 'element'
+  );
+  let mapId = payload.map_id ?? existing?.payload?.map_id;
   if (!mapId) {
     const prepared = await store.getPreparedMaps();
     for (const p of prepared) {
       const els = await store.getElements(p.mapId);
-      if (els.some((e) => String(e.id) === String(id))) {
+      if (els.some((e) => sameResourceId(e.id, id))) {
         mapId = p.mapId;
         break;
       }
     }
   }
   const elements = mapId ? await store.getElements(mapId) : [];
-  const current = elements.find((e) => String(e.id) === String(id));
+  const current = elements.find((e) => sameResourceId(e.id, id));
+  const nextStyle = {
+    ...styleFromElement(
+      mergeOutboxPayloads(current ?? {}, {
+        ...payload,
+        style: payload.style !== undefined ? payload.style : current?.style,
+      })
+    ),
+    ...pickStyleFallbackFields(payload),
+  };
   const updated = {
     ...(current ?? { id, map_id: mapId, element_type: payload.element_type ?? 'point' }),
     ...payload,
     id,
     map_id: mapId ?? current?.map_id ?? payload.map_id,
     version: current?.version ?? payload.base_version ?? 0,
+    style: nextStyle ?? {},
     _pending: true,
   };
   if (!updated.map_id) {
     throw new Error('Element not found in offline cache.');
   }
+  await ensureOfflineMapReady(store, updated.map_id);
   await store.upsertElement(updated.map_id, updated);
-  await store.collapseOutboxForResource('element', id);
-  await store.enqueue({
-    client_mutation_id: clientMutationId,
-    resource_type: 'element',
-    op: 'update',
-    resource_id: id,
-    base_version: payload.base_version ?? current.version,
-    payload,
-  });
+  const syncPayload = buildElementSyncPayload(updated);
+  const collapsed = await store.collapseOutboxForResource('element', id);
+  if (collapsed?.op === 'create' && collapsed.status === OUTBOX_STATUS.PENDING) {
+    await store.updateOutbox(collapsed.client_mutation_id, { payload: syncPayload });
+  } else {
+    await store.enqueue({
+      client_mutation_id: clientMutationId,
+      resource_type: 'element',
+      op: 'update',
+      resource_id: id,
+      base_version: payload.base_version ?? current?.version,
+      payload: syncPayload,
+    });
+  }
   return { ...updated, client_mutation_id: clientMutationId, _queued: true };
 }
 

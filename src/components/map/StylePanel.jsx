@@ -28,6 +28,7 @@ import {
 import ColorField from '@/components/map/ColorField';
 import IconLibraryList from '@/components/map/IconLibraryList';
 import { api } from '@/api/apiClient';
+import { pickStyleFallbackFields } from '@/lib/offline/outboxMerge';
 import { isOnline } from '@/lib/offline/connectivity';
 import { canUseIconCanvasEditor } from '@/lib/icons/desktopCapability';
 import {
@@ -429,9 +430,7 @@ export default function StylePanel({
     if (onPreview) {
       onPreview({
         style: JSON.stringify(mergeStyleWithPesqueiro(style, isPesqueiro, pescarias)),
-        icon_name: style.icon_name,
-        icon_color: style.icon_color,
-        custom_icon_url: style.custom_icon_url,
+        ...pickStyleFallbackFields(style),
         name: details.name,
       });
     }
@@ -690,9 +689,7 @@ export default function StylePanel({
       ...details,
       element_category: selectedCategoryId,
       style: JSON.stringify(stylePayload),
-      icon_name: style.icon_name,
-      icon_color: style.icon_color,
-      custom_icon_url: style.custom_icon_url,
+      ...pickStyleFallbackFields(style),
       photo_urls: photos.map((p) => p.url),
       videos,
       video_urls: videos.map((v) => v.url),

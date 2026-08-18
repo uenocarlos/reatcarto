@@ -152,4 +152,57 @@ describe('generateExport', () => {
 
     expect(downloadBlob).not.toHaveBeenCalled();
   });
+
+  it('caps capture pixel ratio on mobile so Safari does not OOM at 300 DPI', async () => {
+    const toPng = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
+    const downloadBlob = vi.fn();
+
+    await generateExport(
+      {
+        compositionEl: makeCompositionEl(true),
+        format: 'png',
+        dpi: 300,
+        paper: 'a4',
+        orientation: 'portrait',
+        fileTitle: 'Mapa',
+        mobile: true,
+      },
+      {
+        toPng,
+        downloadBlob,
+        waitForTiles: async () => {},
+        dataUrlToBlob: async () => new Blob(['x'], { type: 'image/png' }),
+      }
+    );
+
+    expect(toPng.mock.calls[0][1].pixelRatio).toBe(150 / 96);
+  });
+
+  it('retries capture at pixelRatio 1 after a memory failure', async () => {
+    const toPng = vi.fn()
+      .mockRejectedValueOnce(new Error('Out of memory'))
+      .mockResolvedValueOnce('data:image/png;base64,AAAA');
+    const downloadBlob = vi.fn();
+
+    await generateExport(
+      {
+        compositionEl: makeCompositionEl(true),
+        format: 'png',
+        dpi: 150,
+        paper: 'a4',
+        orientation: 'portrait',
+        fileTitle: 'Mapa',
+      },
+      {
+        toPng,
+        downloadBlob,
+        waitForTiles: async () => {},
+        dataUrlToBlob: async () => new Blob(['x'], { type: 'image/png' }),
+      }
+    );
+
+    expect(toPng).toHaveBeenCalledTimes(2);
+    expect(toPng.mock.calls[1][1].pixelRatio).toBe(1);
+    expect(downloadBlob).toHaveBeenCalledTimes(1);
+  });
 });

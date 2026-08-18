@@ -71,9 +71,14 @@ function configure_session(): void
     }
 
     $session = app_config()['session'];
+    $lifetime = max(0, (int) ($session['lifetime'] ?? 0));
+    if ($lifetime > 0) {
+        ini_set('session.gc_maxlifetime', (string) $lifetime);
+        ini_set('session.cookie_lifetime', (string) $lifetime);
+    }
     session_name($session['name']);
     session_set_cookie_params([
-        'lifetime' => 0,
+        'lifetime' => $lifetime,
         'path' => '/',
         'secure' => (bool) $session['secure'],
         'httponly' => (bool) $session['httponly'],

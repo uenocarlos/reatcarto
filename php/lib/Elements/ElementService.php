@@ -44,17 +44,53 @@ function element_is_publicly_visible(array $row): bool
 }
 
 /**
+ * Encode element style as a JSON object string for jsonb (never a nested JSON string).
+ */
+function encode_element_style_for_db(mixed $style): string
+{
+    if (is_array($style)) {
+        $encoded = json_encode($style, JSON_UNESCAPED_UNICODE);
+        return is_string($encoded) ? $encoded : '{}';
+    }
+    if (!is_string($style) || trim($style) === '') {
+        return '{}';
+    }
+    $decoded = json_decode($style, true);
+    if (is_string($decoded)) {
+        $decoded = json_decode($decoded, true);
+    }
+    if (is_array($decoded)) {
+        $encoded = json_encode($decoded, JSON_UNESCAPED_UNICODE);
+        return is_string($encoded) ? $encoded : '{}';
+    }
+
+    return '{}';
+}
+
+function decode_element_style_from_db(mixed $style): array
+{
+    if (is_array($style)) {
+        return $style;
+    }
+    if (!is_string($style) || trim($style) === '') {
+        return [];
+    }
+    $decoded = json_decode($style, true);
+    if (is_string($decoded)) {
+        $decoded = json_decode($decoded, true);
+    }
+
+    return is_array($decoded) ? $decoded : [];
+}
+
+/**
  * @param array<string, mixed> $row
  * @return array<string, mixed>
  */
 function format_element_record(array $row, array $photos = [], ?array $videos = null): array
 {
     $geojson = geojson_from_row((string) $row['geojson']);
-    $style = $row['style'];
-    if (is_string($style)) {
-        $decodedStyle = json_decode($style, true);
-        $style = is_array($decodedStyle) ? $decodedStyle : [];
-    }
+    $style = decode_element_style_from_db($row['style'] ?? null);
     if ($videos === null && isset($row['id'])) {
         $videos = videos_for_element((string) $row['id']);
     }
@@ -86,12 +122,8 @@ function format_element_record(array $row, array $photos = [], ?array $videos = 
 function format_public_element_record(array $row, array $photos = [], ?array $videos = null): array
 {
     $geojson = geojson_from_row((string) $row['geojson']);
-    $style = $row['style'];
-    if (is_string($style)) {
-        $decodedStyle = json_decode($style, true);
-        $style = is_array($decodedStyle) ? $decodedStyle : [];
-    }
-    if (is_array($style) && array_key_exists('custom_icon_url', $style)) {
+    $style = decode_element_style_from_db($row['style'] ?? null);
+    if (array_key_exists('custom_icon_url', $style)) {
         $style['custom_icon_url'] = rewrite_public_custom_icon_url($style['custom_icon_url']);
     }
     if ($videos === null && isset($row['id'])) {
@@ -264,10 +296,7 @@ function elements_create(array $user, array $input): array
     }
 
     $category = trim((string) ($input['element_category'] ?? ''));
-    $style = $input['style'] ?? '{}';
-    if (is_array($style)) {
-        $style = json_encode($style, JSON_UNESCAPED_UNICODE);
-    }
+    $style = encode_element_style_for_db($input['style'] ?? '{}');
     $isPubliclyVisible = array_key_exists('is_publicly_visible', $input)
         ? parse_bool_input($input['is_publicly_visible'], true)
         : true;
@@ -382,12 +411,8 @@ function elements_update(array $user, array $input, bool $forceVersion = false):
     }
 
     if (array_key_exists('style', $input)) {
-        $style = $input['style'];
-        if (is_array($style)) {
-            $style = json_encode($style, JSON_UNESCAPED_UNICODE);
-        }
         $setParts[] = 'style = :style::jsonb';
-        $params['style'] = (string) $style;
+        $params['style'] = encode_element_style_for_db($input['style']);
     }
 
     if (array_key_exists('is_publicly_visible', $input)) {

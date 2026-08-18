@@ -1,5 +1,6 @@
 import { OUTBOX_STATUS, OfflineStore } from '@/lib/offline/OfflineStore';
 import { isOnline } from '@/lib/offline/connectivity';
+import { mergeElementForSync, parseStyleValue } from '@/lib/offline/outboxMerge';
 
 /**
  * @param {object} errorPayload - 409 conflict body from api
@@ -101,16 +102,35 @@ export class SyncEngine {
           break;
         }
 
+        const collapsed = new Set();
+        for (const row of pending) {
+          if (!row.resource_type || row.resource_id == null) continue;
+          const key = `${row.resource_type}\0${row.resource_id}`;
+          if (collapsed.has(key)) continue;
+          collapsed.add(key);
+          await this.store.collapseOutboxForResource(row.resource_type, row.resource_id);
+        }
+
         const ready = await this.getReadyMutations();
-        const mutations = ready.map((row) => ({
-          client_mutation_id: row.client_mutation_id,
-          resource_type: row.resource_type,
-          op: row.op,
-          resource_id: row.resource_id,
-          base_version: row.base_version,
-          depends_on: row.depends_on ?? null,
-          payload: row.payload,
-        }));
+        const mutations = [];
+        for (const row of ready) {
+          let payload = row.payload ?? {};
+          if (row.resource_type === 'element' && row.op !== 'delete' && row.resource_id != null) {
+            const local = await this.store.getElementById(row.resource_id);
+            if (local) {
+              payload = mergeElementForSync(local, payload);
+            }
+          }
+          mutations.push({
+            client_mutation_id: row.client_mutation_id,
+            resource_type: row.resource_type,
+            op: row.op,
+            resource_id: row.resource_id,
+            base_version: row.base_version,
+            depends_on: row.depends_on ?? null,
+            payload,
+          });
+        }
 
         if (mutations.length === 0) {
           waiting = true;
@@ -179,7 +199,19 @@ export class SyncEngine {
       const localId =
         outboxRow?.op === 'create' && outboxRow.resource_id ? outboxRow.resource_id : null;
 
-      await this.store.upsertElement(resource.map_id, resource);
+      const local = await this.store.getElementById(localId || resource.id);
+      const localStyle = parseStyleValue(local?.style) ?? {};
+      const remoteStyle = parseStyleValue(resource.style) ?? {};
+      const style =
+        Object.keys(localStyle).length > 0
+          ? { ...remoteStyle, ...localStyle }
+          : remoteStyle;
+      await this.store.upsertElement(resource.map_id, {
+        ...local,
+        ...resource,
+        style,
+        _pending: false,
+      });
 
       if (localId && localId !== resource.id) {
         await this.store.removeElement(localId);

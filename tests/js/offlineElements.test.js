@@ -6,6 +6,8 @@ const offlineCreateElementMock = vi.fn();
 const offlineGetMapMock = vi.fn();
 const storeGetElementsMock = vi.fn();
 const storeGetAllOutboxMock = vi.fn();
+const storeRemoveElementMock = vi.fn();
+const storeUpsertElementMock = vi.fn();
 
 vi.mock('@/api/http', async () => {
   const actual = await vi.importActual('@/api/http');
@@ -30,6 +32,8 @@ vi.mock('@/lib/offline/offlineApi', async (importOriginal) => {
     storeForUser: () => ({
       getElements: storeGetElementsMock,
       getAllOutbox: storeGetAllOutboxMock,
+      removeElement: storeRemoveElementMock,
+      upsertElement: storeUpsertElementMock,
     }),
   };
 });
@@ -37,6 +41,7 @@ vi.mock('@/lib/offline/offlineApi', async (importOriginal) => {
 import { api, ApiError, normalizeElement } from '@/api/apiClient';
 import { apiFetch } from '@/api/http';
 import { parseElementGeojson, parseElementStyle } from '@/components/map/export/exportMapUtils';
+import { resolveLocalElementId } from '@/lib/offline/offlineApi';
 
 const pointGeo = { type: 'Point', coordinates: [-52.1, -32.03] };
 const pointStyle = { icon_name: 'pin', icon_color: '#F97316' };
@@ -66,6 +71,10 @@ describe('offline element create/list', () => {
     storeGetElementsMock.mockResolvedValue([]);
     storeGetAllOutboxMock.mockReset();
     storeGetAllOutboxMock.mockResolvedValue([]);
+    storeRemoveElementMock.mockReset();
+    storeRemoveElementMock.mockResolvedValue(undefined);
+    storeUpsertElementMock.mockReset();
+    storeUpsertElementMock.mockResolvedValue(undefined);
   });
 
   it('normalizeElement stringifies object geojson and style from IndexedDB', () => {
@@ -109,6 +118,44 @@ describe('offline element create/list', () => {
     expect(typeof created.geojson).toBe('string');
   });
 
+  it('create reuses the editor local_id so later edits sync the same element', async () => {
+    isOnlineMock.mockReturnValue(false);
+    offlineCreateElementMock.mockResolvedValue(localElement({ id: 'local-keep' }));
+
+    await api.entities.MapElement.create({
+      map_id: 'map-1',
+      local_id: 'local-keep',
+      element_type: 'point',
+      geojson: JSON.stringify(pointGeo),
+      style: JSON.stringify(pointStyle),
+    });
+
+    expect(offlineCreateElementMock).toHaveBeenCalledWith(
+      expect.objectContaining({ local_id: 'local-keep', map_id: 'map-1' }),
+      expect.anything()
+    );
+  });
+
+  it('create queues locally when the session cookie is missing (401)', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new ApiError('unauthenticated', 'Authentication required.', 401));
+    offlineCreateElementMock.mockResolvedValue(localElement({ id: 'local-401' }));
+
+    const created = await api.entities.MapElement.create({
+      map_id: 'map-1',
+      element_type: 'point',
+      geojson: JSON.stringify(pointGeo),
+      style: JSON.stringify(pointStyle),
+    });
+
+    expect(offlineCreateElementMock).toHaveBeenCalledTimes(1);
+    expect(created.id).toBe('local-401');
+  });
+
+  it('resolveLocalElementId keeps the optimistic id from the editor', () => {
+    expect(resolveLocalElementId({ local_id: 'local-abc' })).toBe('local-abc');
+    expect(resolveLocalElementId({ id: 'already-there' })).toBe('already-there');
+  });
+
   it('filter offline normalizes object geojson so the map can render', async () => {
     isOnlineMock.mockReturnValue(false);
     offlineGetMapMock.mockResolvedValue({
@@ -146,6 +193,29 @@ describe('offline element create/list', () => {
     const elements = await api.entities.MapElement.filter({ map_id: 'map-1' });
 
     expect(elements.map((el) => el.id)).not.toContain('gone-1');
+  });
+
+  it('filter online does not resurrect a cached copy after a successful server delete', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ elements: [] });
+    storeGetElementsMock.mockResolvedValue([
+      localElement({ id: 'deleted-online', _pending: false }),
+    ]);
+
+    const elements = await api.entities.MapElement.filter({ map_id: 'map-1' });
+
+    expect(elements.map((el) => el.id)).not.toContain('deleted-online');
+  });
+
+  it('delete online removes the element from the IndexedDB cache', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ success: true, deleted: true });
+
+    await api.entities.MapElement.delete('el-1', 3);
+
+    expect(apiFetch).toHaveBeenCalledWith(
+      '/elements/delete.php',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+    expect(storeRemoveElementMock).toHaveBeenCalledWith('el-1');
   });
 
   it('parseElementGeojson accepts object or string without throwing', () => {

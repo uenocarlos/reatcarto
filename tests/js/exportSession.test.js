@@ -3,6 +3,7 @@ import {
   createEditorExportSnapshot,
   createDefaultExportSession,
   clampDpi,
+  resolveExportPixelRatio,
   setFormat,
   setLegendColumns,
   setLegendInside,
@@ -29,7 +30,7 @@ describe('export session factory & inheritance', () => {
     expect(session.title).toBe('Estuário');
     expect(session.format).toBe('png');
     expect(session.paper).toBe('a4');
-    expect(session.orientation).toBe('landscape');
+    expect(session.orientation).toBe('portrait');
     expect(session.dpi).toBe(300);
     expect(session.legendPosition).toBe('right');
     expect(session.locationCount).toBe(0);
@@ -49,6 +50,17 @@ describe('export session factory & inheritance', () => {
   it('UT-006: default dpi is 300', () => {
     const session = createDefaultExportSession(createEditorExportSnapshot({ mapName: 'X' }));
     expect(session.dpi).toBe(300);
+  });
+
+  it('mobile export defaults to portrait and a memory-safe DPI', () => {
+    const session = createDefaultExportSession(
+      createEditorExportSnapshot({ mapName: 'Praia' }),
+      { mobile: true },
+    );
+    expect(session.orientation).toBe('portrait');
+    expect(session.dpi).toBe(150);
+    expect(resolveExportPixelRatio(300, { mobile: true })).toBe(150 / 96);
+    expect(resolveExportPixelRatio(300)).toBe(300 / 96);
   });
 
   it('UT-014: hiddenIds copied, not shared mutable Set', () => {

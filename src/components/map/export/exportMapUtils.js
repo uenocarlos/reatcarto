@@ -1,3 +1,5 @@
+import { styleFromElement } from '@/lib/offline/outboxMerge';
+
 export { createColoredIcon, iconSizeForZoom } from '../pointIcon';
 
 export function parseElementGeojson(element) {
@@ -11,15 +13,7 @@ export function parseElementGeojson(element) {
 }
 
 export function parseElementStyle(element) {
-  if (element?.style && typeof element.style === 'object') return element.style;
-  if (typeof element?.style === 'string') {
-    try {
-      return JSON.parse(element.style);
-    } catch {
-      return {};
-    }
-  }
-  return {};
+  return styleFromElement(element);
 }
 
 export function getDashArray(style) {

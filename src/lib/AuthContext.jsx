@@ -3,8 +3,13 @@ import { api, ApiError } from '@/api/apiClient';
 import { SyncEngine } from '@/lib/sync/SyncEngine';
 import { OfflineStore } from '@/lib/offline/OfflineStore';
 import { orchestrateLogout } from '@/lib/offline/logoutFlow';
-import { clearOfflineAccount } from '@/lib/offline/offlineApi';
 import { isOnline, onConnectivityChange } from '@/lib/offline/connectivity';
+import {
+  clearAuthSnapshot,
+  loadAuthSnapshot,
+  saveAuthSnapshot,
+  shouldKeepLocalSession,
+} from '@/lib/offline/authSnapshot';
 
 /** @internal Exported for unit tests */
 export async function executeOutboxFlush(getEngine) {
@@ -81,28 +86,54 @@ export const AuthProvider = ({ children }) => {
     }
   }, [getSyncEngine]);
 
+  const applyAuthenticatedUser = useCallback(async (currentUser, { persist = true } = {}) => {
+    setUser(currentUser);
+    setIsAuthenticated(true);
+    api.offline.setUserId(currentUser.id);
+    const store = new OfflineStore(currentUser.id);
+    await store.bindAccount();
+    if (persist) saveAuthSnapshot(currentUser);
+  }, []);
+
   const checkUserAuth = useCallback(async () => {
     try {
       setIsLoadingAuth(true);
       setAuthError(null);
-      const currentUser = await api.auth.me();
-      setUser(currentUser);
-      setIsAuthenticated(true);
-      api.offline.setUserId(currentUser.id);
-      const store = new OfflineStore(currentUser.id);
-      await store.bindAccount();
-    } catch (error) {
-      setUser(null);
-      setIsAuthenticated(false);
-      api.offline.setUserId(null);
-      if (!(error instanceof ApiError && error.status === 401)) {
-        setAuthError({ type: 'auth_check_failed', message: error.message });
+      const snapshot = loadAuthSnapshot();
+      if (shouldKeepLocalSession(snapshot)) {
+        await applyAuthenticatedUser(snapshot, { persist: false });
+        setIsLoadingAuth(false);
+        setAuthChecked(true);
+      }
+
+      if (!isOnline()) {
+        if (!shouldKeepLocalSession(snapshot)) {
+          setUser(null);
+          setIsAuthenticated(false);
+          api.offline.setUserId(null);
+        }
+        return;
+      }
+
+      try {
+        const currentUser = await api.auth.me();
+        await applyAuthenticatedUser(currentUser);
+      } catch (error) {
+        if (shouldKeepLocalSession(snapshot)) {
+          return;
+        }
+        setUser(null);
+        setIsAuthenticated(false);
+        api.offline.setUserId(null);
+        if (!(error instanceof ApiError && error.status === 401)) {
+          setAuthError({ type: 'auth_check_failed', message: error.message });
+        }
       }
     } finally {
       setIsLoadingAuth(false);
       setAuthChecked(true);
     }
-  }, []);
+  }, [applyAuthenticatedUser]);
 
   const checkAppState = checkUserAuth;
 
@@ -143,11 +174,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (identifier, password) => {
     const loggedInUser = await api.auth.login(identifier, password);
-    setUser(loggedInUser);
-    setIsAuthenticated(true);
-    api.offline.setUserId(loggedInUser.id);
-    const store = new OfflineStore(loggedInUser.id);
-    await store.bindAccount();
+    await applyAuthenticatedUser(loggedInUser);
     setAuthError(null);
     return loggedInUser;
   };
@@ -157,6 +184,7 @@ export const AuthProvider = ({ children }) => {
     if (!userId) {
       setUser(null);
       setIsAuthenticated(false);
+      clearAuthSnapshot();
       return { success: true };
     }
 
@@ -180,6 +208,7 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setIsAuthenticated(false);
     api.offline.setUserId(null);
+    clearAuthSnapshot();
     syncEngineRef.current = null;
     syncProgressUnsubRef.current?.();
     syncProgressUnsubRef.current = null;
@@ -199,10 +228,17 @@ export const AuthProvider = ({ children }) => {
   };
 
   const refreshUser = async () => {
-    const currentUser = await api.auth.me();
-    setUser(currentUser);
-    api.offline.setUserId(currentUser.id);
-    return currentUser;
+    try {
+      const currentUser = await api.auth.me();
+      await applyAuthenticatedUser(currentUser);
+      return currentUser;
+    } catch (error) {
+      const snapshot = loadAuthSnapshot();
+      if (shouldKeepLocalSession(snapshot)) {
+        return snapshot;
+      }
+      throw error;
+    }
   };
 
   return (

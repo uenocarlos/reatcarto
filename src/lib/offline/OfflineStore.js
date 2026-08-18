@@ -1,4 +1,5 @@
 import { openDB } from 'idb';
+import { collapsePendingMutations, sameResourceId } from '@/lib/offline/outboxMerge';
 
 export const DB_NAME = 'reatcarto-offline';
 export const DB_VERSION = 1;
@@ -163,54 +164,20 @@ export class OfflineStore {
     const pending = rows.filter(
       (r) =>
         r.resource_type === resourceType &&
-        r.resource_id === resourceId &&
+        sameResourceId(r.resource_id, resourceId) &&
         r.status === OUTBOX_STATUS.PENDING
     );
-    if (pending.length <= 1) return pending[0] ?? null;
-    pending.sort((a, b) => a.created_at.localeCompare(b.created_at));
-    const hasDelete = pending.some((r) => r.op === 'delete');
+    const { kept, removedIds } = collapsePendingMutations(pending);
+    if (!kept) return null;
+
     const db = await getDb();
-
-    if (hasDelete) {
-      const finalRow = pending.find((r) => r.op === 'delete') ?? pending[pending.length - 1];
-      for (const row of pending) {
-        if (row.id !== finalRow.id) {
-          await db.delete('outbox', row.id);
-        }
-      }
-      const merged = { ...finalRow, payload: {} };
-      await db.put('outbox', merged);
-      return merged;
+    for (const id of removedIds) {
+      await db.delete('outbox', id);
     }
-
-    const createIdx = pending.findIndex((r) => r.op === 'create');
-    if (createIdx !== -1) {
-      const createRow = { ...pending[createIdx] };
-      for (let i = createIdx + 1; i < pending.length; i += 1) {
-        const later = pending[i];
-        if (later.op === 'update') {
-          createRow.payload = { ...createRow.payload, ...(later.payload ?? {}) };
-          if (later.base_version != null) {
-            createRow.base_version = later.base_version;
-          }
-        }
-      }
-      for (const row of pending) {
-        if (row.id !== createRow.id) {
-          await db.delete('outbox', row.id);
-        }
-      }
-      await db.put('outbox', createRow);
-      return createRow;
+    if (removedIds.length > 0 || pending.length > 1) {
+      await db.put('outbox', kept);
     }
-
-    const finalRow = pending[pending.length - 1];
-    for (const row of pending) {
-      if (row.id !== finalRow.id) {
-        await db.delete('outbox', row.id);
-      }
-    }
-    return finalRow;
+    return kept;
   }
 
   async storeConflict(conflict) {
@@ -319,6 +286,12 @@ export class OfflineStore {
     const db = await getDb();
     const rows = await db.getAllFromIndex('elements', 'by_map', [this.userId, mapId]);
     return rows.map((r) => r.element);
+  }
+
+  async getElementById(elementId) {
+    const db = await getDb();
+    const row = await db.get('elements', scopedKey(this.userId, elementId));
+    return row?.element ?? null;
   }
 
   async upsertElement(mapId, element) {

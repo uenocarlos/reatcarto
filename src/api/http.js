@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 
-export const NATIVE_API_BASE_URL = 'https://reatcarto.furg.br:8443/php';
+export const NATIVE_API_BASE_URL = 'http://200.132.255.26/php';
 const API_BASE_URL = Capacitor.isNativePlatform() ? NATIVE_API_BASE_URL : '/php';
 const NATIVE_ORIGIN = NATIVE_API_BASE_URL.replace(/\/php\/?$/, '');
 
@@ -13,9 +13,9 @@ export function resolveApiAssetUrl(pathOrUrl) {
   if (value.startsWith('/php/')) {
     return Capacitor.isNativePlatform() ? `${NATIVE_ORIGIN}${value}` : value;
   }
-  if (value.startsWith('/icons/')) {
-    const assetPath = `/assets${value}`;
-    return Capacitor.isNativePlatform() ? `${NATIVE_ORIGIN}${assetPath}` : assetPath;
+  if (value.startsWith('/icons/') || value.startsWith('/assets/icons/')) {
+    const assetPath = value.startsWith('/icons/') ? `/assets${value}` : value;
+    return assetPath;
   }
   if (Capacitor.isNativePlatform() && value.startsWith('/')) {
     return `${NATIVE_ORIGIN}${value}`;

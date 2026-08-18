@@ -13,6 +13,7 @@ import {
   offlineQueuePhotoUpload,
   newMutationId,
   storeForUser,
+  cacheMapForOffline,
 } from '@/lib/offline/offlineApi';
 import { reduceConflicts } from '@/lib/sync/SyncEngine';
 
@@ -32,7 +33,11 @@ function abortSignalAfter(ms) {
 }
 
 function isNetworkError(err) {
-  return err?.code === 'network_error' || err?.name === 'AbortError';
+  return err?.code === 'network_error' || err?.name === 'AbortError' || err?.status === 0;
+}
+
+function isOfflineFallbackError(err) {
+  return isNetworkError(err) || err?.status === 401;
 }
 
 async function fetchAllPaginated(buildPath, mapItems) {
@@ -60,7 +65,7 @@ async function withNetworkFallback(onlineFn, offlineFn) {
   try {
     return await onlineFn();
   } catch (err) {
-    if (isNetworkError(err)) {
+    if (isOfflineFallbackError(err)) {
       try {
         return await offlineFn();
       } catch {
@@ -85,25 +90,50 @@ async function readOfflineElements(mapId) {
   return (offline.elements ?? []).map(normalizeElement);
 }
 
+async function writeThroughElement(element) {
+  try {
+    if (!getOfflineUserId() || !element?.map_id || !element?.id) return;
+    await storeForUser().upsertElement(element.map_id, element);
+  } catch {
+    /* IndexedDB cache is best-effort */
+  }
+}
+
+async function dropCachedElement(id) {
+  try {
+    if (!getOfflineUserId() || id == null) return;
+    await storeForUser().removeElement(id);
+  } catch {
+    /* IndexedDB cache is best-effort */
+  }
+}
+
+function pendingOutboxIds(outbox, op) {
+  return new Set(
+    (outbox ?? [])
+      .filter((row) => row.resource_type === 'element' && row.op === op && row.status === 'pending')
+      .map((row) => String(row.resource_id))
+  );
+}
+
 export async function mergeLocalPendingElements(mapId, serverElements) {
   try {
     if (!getOfflineUserId()) return serverElements;
     const store = storeForUser();
     const local = await store.getElements(mapId);
     const outbox = typeof store.getAllOutbox === 'function' ? await store.getAllOutbox() : [];
-    const deletedIds = new Set(
-      (outbox ?? [])
-        .filter((row) => row.resource_type === 'element' && row.op === 'delete' && row.status === 'pending')
-        .map((row) => String(row.resource_id))
-    );
+    const deletedIds = pendingOutboxIds(outbox, 'delete');
+    const pendingCreateIds = pendingOutboxIds(outbox, 'create');
+    const pendingUpdateIds = pendingOutboxIds(outbox, 'update');
     const byId = new Map((serverElements ?? []).map((el) => [String(el.id), el]));
     for (const raw of local ?? []) {
       const normalized = normalizeElement(raw);
       const id = String(normalized.id);
       if (deletedIds.has(id)) continue;
-      if (raw?._pending || !byId.has(id)) {
-        byId.set(id, { ...normalized, ...(raw?._pending ? { _pending: true } : {}) });
-      }
+      const keepLocal =
+        Boolean(raw?._pending) || pendingCreateIds.has(id) || pendingUpdateIds.has(id);
+      if (!keepLocal) continue;
+      byId.set(id, { ...normalized, _pending: true });
     }
     for (const id of deletedIds) {
       byId.delete(id);
@@ -424,25 +454,35 @@ export const api = {
         );
       },
       create: async (payload, clientMutationId = newMutationIdInternal()) => {
+        const { local_id, ...rest } = payload ?? {};
         const runOffline = async () =>
-          normalizeElement(await offlineCreateElement(payload, clientMutationId));
+          normalizeElement(await offlineCreateElement({ ...rest, local_id }, clientMutationId));
         const style =
-          typeof payload.style === 'string' ? payload.style : JSON.stringify(payload.style ?? {});
+          typeof rest.style === 'string' ? rest.style : JSON.stringify(rest.style ?? {});
         const geojson =
-          typeof payload.geojson === 'string' ? payload.geojson : JSON.stringify(payload.geojson);
+          typeof rest.geojson === 'string' ? rest.geojson : JSON.stringify(rest.geojson);
         return withNetworkFallback(async () => {
           const data = await apiFetch('/elements/create.php', {
             method: 'POST',
             signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
             body: {
-              ...payload,
-              name: payload.name?.trim() ? payload.name : 'Element',
+              ...rest,
+              name: rest.name?.trim() ? rest.name : 'Element',
               style,
               geojson,
               client_mutation_id: clientMutationId,
             },
           });
-          return normalizeElement(data.element);
+          const created = normalizeElement(data.element);
+          await writeThroughElement({ ...created, _pending: false });
+          if (local_id && String(local_id) !== String(created.id)) {
+            try {
+              await storeForUser().removeElement(local_id);
+            } catch {
+              /* ignore */
+            }
+          }
+          return created;
         }, runOffline);
       },
       update: async (id, payload, clientMutationId = newMutationIdInternal()) => {
@@ -478,7 +518,9 @@ export const api = {
             signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
             body,
           });
-          return normalizeElement(data.element);
+          const updated = normalizeElement(data.element);
+          await writeThroughElement({ ...updated, _pending: false });
+          return updated;
         }, runOffline);
       },
       delete: async (id, baseVersion, clientMutationId = newMutationIdInternal()) => {
@@ -486,11 +528,13 @@ export const api = {
           async () => {
             const body = { id, client_mutation_id: clientMutationId };
             if (baseVersion != null) body.base_version = baseVersion;
-            return apiFetch('/elements/delete.php', {
+            const result = await apiFetch('/elements/delete.php', {
               method: 'DELETE',
               signal: abortSignalAfter(ELEMENT_REQUEST_TIMEOUT_MS),
               body,
             });
+            await dropCachedElement(id);
+            return result;
           },
           () => offlineDeleteElement(id, baseVersion, clientMutationId)
         );
@@ -645,6 +689,7 @@ export const api = {
     setUserId: setOfflineUserId,
     listPreparedMaps: offlineListMaps,
     reduceConflicts,
+    cacheMap: cacheMapForOffline,
   },
   public: {
     listMaps: async ({ q, page, pageSize } = {}) => {

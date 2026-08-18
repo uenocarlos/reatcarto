@@ -153,9 +153,11 @@ export default function MapEditor() {
     retry: false,
   });
 
-  const { data: elements = [] } = useQuery({
+  const { data: elements = [], isFetched: elementsFetched } = useQuery({
     queryKey: ['elements', mapId],
     queryFn: () => api.entities.MapElement.filter({ map_id: mapId }),
+    refetchOnWindowFocus: () => isOnline(),
+    placeholderData: (previous) => previous,
   });
 
   const invalidateMapQueries = useCallback(() => {
@@ -240,6 +242,12 @@ export default function MapEditor() {
     elementsRef.current = elements;
   }, [elements]);
 
+  useEffect(() => {
+    if (!mapData?.id || !isAuthenticated || !elementsFetched) return undefined;
+    void api.offline.cacheMap(mapData, elementsRef.current);
+    return undefined;
+  }, [mapData, isAuthenticated, elementsFetched, mapId]);
+
   const commitHistory = useCallback((entry) => {
     if (historySilentRef.current || !entry) return;
     setHistory((prev) => {
@@ -281,7 +289,7 @@ export default function MapEditor() {
   const createMutation = useMutation({
     mutationFn: (data) => api.entities.MapElement.create(data),
     onMutate: async (data) => {
-      const optimisticId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const optimisticId = data.local_id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const geojson =
         typeof data.geojson === 'string' ? data.geojson : JSON.stringify(data.geojson ?? {});
       const style =
@@ -390,7 +398,17 @@ export default function MapEditor() {
       if (result) {
         queryClient.setQueryData(['elements', mapId], (old = []) =>
           (old ?? []).map((el) =>
-            String(el.id) === String(variables.id) ? { ...el, ...result, _isNew: el._isNew } : el
+            String(el.id) === String(variables.id)
+              ? {
+                  ...el,
+                  ...result,
+                  _isNew: el._isNew,
+                  style: result.style || el.style,
+                  geojson: result.geojson || el.geojson,
+                  name: result.name || el.name,
+                  element_category: result.element_category || el.element_category,
+                }
+              : el
           )
         );
       }
@@ -420,6 +438,7 @@ export default function MapEditor() {
     onMutate: async (variables) => {
       const id = variables.id;
       suppressedCreateIdsRef.current.add(String(id));
+      await queryClient.cancelQueries({ queryKey: ['elements', mapId] });
       const previous = queryClient.getQueryData(['elements', mapId]);
       const withoutDeleted = (old = []) =>
         (old ?? []).filter((el) => String(el.id) !== String(id));
@@ -427,8 +446,6 @@ export default function MapEditor() {
       setEditingElement((prev) => (prev && String(prev.id) === String(id) ? null : prev));
       geometryBaselineRef.current = null;
       setGeometryEditMode(false);
-      await queryClient.cancelQueries({ queryKey: ['elements', mapId] });
-      queryClient.setQueryData(['elements', mapId], withoutDeleted);
       return { previous };
     },
     onSuccess: (_result, variables) => {
@@ -554,6 +571,7 @@ export default function MapEditor() {
 
     createMutation.mutate({
       map_id: mapId,
+      local_id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       element_type: type,
       geojson: geojson,
       name: '',
@@ -741,6 +759,7 @@ export default function MapEditor() {
     skipOpenEditorRef.current = true;
     createMutation.mutate({
       map_id: mapId,
+      local_id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       element_type: 'point',
       geojson: JSON.stringify(geojson),
       name: copiedElement.name || '',
